@@ -3,9 +3,8 @@ $ErrorActionPreference = "Stop"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
-# Detect architecture
-$Arch = (Get-WmiObject Win32_Processor).Architecture
-if ($Arch -eq 12) { $Tag = "arm64" } else { $Tag = "amd64" }
+# Detect architecture via env var (works on all PowerShell versions)
+if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { $Tag = "arm64" } else { $Tag = "amd64" }
 
 Write-Host "=== Lab Setup ===" -ForegroundColor Cyan
 Write-Host "Architecture: $Tag"
@@ -16,13 +15,13 @@ Write-Host "[0/4] Checking Docker..." -ForegroundColor Yellow
 $MaxWait = 60
 $Waited  = 0
 while ($true) {
-    $Result = & docker info 2>&1
+    $null = & docker info 2>&1
     if ($LASTEXITCODE -eq 0) {
         Write-Host "  Docker is ready." -ForegroundColor Green
         break
     }
     if ($Waited -ge $MaxWait) {
-        Write-Host "" -ForegroundColor Red
+        Write-Host ""
         Write-Host "ERROR: Docker is not responding after ${MaxWait}s." -ForegroundColor Red
         Write-Host ""
         Write-Host "How to fix:" -ForegroundColor Yellow
@@ -39,15 +38,15 @@ Write-Host ""
 
 # Create shared Docker network
 Write-Host "[1/4] Creating shared network 'lab-network'..." -ForegroundColor Yellow
-try {
-    $null = & docker network create lab-network 2>&1
+$null = & docker network create lab-network 2>&1
+if ($LASTEXITCODE -eq 0) {
     Write-Host "  Created." -ForegroundColor Green
-} catch {
+} else {
     Write-Host "  Already exists, skipping." -ForegroundColor Gray
 }
+Write-Host ""
 
 # Load images
-Write-Host ""
 Write-Host "[2/4] Loading Docker images..." -ForegroundColor Yellow
 $ImagesDir = Join-Path $ScriptDir "images"
 
@@ -65,31 +64,33 @@ $AllImages = @(
 
 foreach ($Image in $AllImages) {
     $File = Join-Path $ImagesDir "${Image}-linux-${Tag}.tar.gz"
-    if (Test-Path $File) {
-        Write-Host "  Loading $Image..."
-
-        # Snapshot images before load
-        $Before = @(& docker images --format "{{.Repository}}:{{.Tag}}" 2>$null)
-
-        # docker load streams progress directly to console
-        & docker load --input $File
-
-        # Find newly added images and retag to :latest
-        $After = @(& docker images --format "{{.Repository}}:{{.Tag}}" 2>$null)
-        $NewImages = $After | Where-Object {
-            ($Before -notcontains $_) -and
-            ($_ -notmatch ':latest$') -and
-            ($_ -notmatch '<none>')
-        }
-        foreach ($Loaded in $NewImages) {
-            $Base = $Loaded -replace ':[^:]+$', ''
-            & docker tag $Loaded "${Base}:latest" 2>$null
-            Write-Host "    Tagged: ${Base}:latest" -ForegroundColor DarkGray
-        }
-    } else {
+    if (-not (Test-Path $File)) {
         Write-Host "  ERROR: $File not found." -ForegroundColor Red
         Write-Host "         Download from GitHub Releases and place in the images\ folder." -ForegroundColor Red
         exit 1
+    }
+
+    Write-Host "  Loading $Image..."
+
+    # Capture output to parse "Loaded image: repo:tag" lines
+    $LoadOutput = & docker load --input $File 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "  ERROR: Failed to load ${Image}:" -ForegroundColor Red
+        $LoadOutput | ForEach-Object { Write-Host "    $_" -ForegroundColor Red }
+        exit 1
+    }
+
+    # Retag loaded image to :latest
+    foreach ($Line in $LoadOutput) {
+        Write-Host "    $Line" -ForegroundColor DarkGray
+        if ($Line -match 'Loaded image:\s+(.+)') {
+            $LoadedTag = $Matches[1].Trim()
+            if ($LoadedTag -notmatch ':latest$') {
+                $Base = $LoadedTag -replace ':[^:]+$', ''
+                $null = & docker tag $LoadedTag "${Base}:latest" 2>&1
+                Write-Host "    Tagged: ${Base}:latest" -ForegroundColor DarkGray
+            }
+        }
     }
 }
 
@@ -98,23 +99,35 @@ Write-Host ""
 Write-Host "[3/4] Starting services..." -ForegroundColor Yellow
 
 Write-Host "  Starting VerifierAPI + MySQL..."
-docker compose -f "$ScriptDir\verifier\docker-compose.yml" up -d
+& docker compose -f "$ScriptDir\verifier\docker-compose.yml" up -d
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "  ERROR: Failed to start VerifierAPI." -ForegroundColor Red
+    exit 1
+}
 
 Write-Host "  Starting IssuerAPI + MySQL..."
-docker compose -f "$ScriptDir\issuer\docker-compose.yml" up -d
+& docker compose -f "$ScriptDir\issuer\docker-compose.yml" up -d
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "  ERROR: Failed to start IssuerAPI." -ForegroundColor Red
+    exit 1
+}
 
 Write-Host "  Starting waltid services (may take 1-5 min on first run to pull caddy/postgres)..."
-docker compose -f "$ScriptDir\waltid\docker-compose.yaml" --profile identity up -d
+& docker compose -f "$ScriptDir\waltid\docker-compose.yaml" --profile identity up -d
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "  ERROR: Failed to start waltid services." -ForegroundColor Red
+    exit 1
+}
 
-# Connect waltid containers to lab-network (ignore if already connected)
+# Connect waltid containers to lab-network
 Write-Host "  Connecting waltid services to lab-network..."
-$WaltidContainers = & docker compose -f "$ScriptDir\waltid\docker-compose.yaml" --profile identity ps -q 2>$null
+$WaltidContainers = & docker compose -f "$ScriptDir\waltid\docker-compose.yaml" --profile identity ps -q 2>&1
 foreach ($CID in $WaltidContainers) {
-    if ($CID) {
-        try {
-            $null = & docker network connect lab-network $CID 2>&1
+    if (-not [string]::IsNullOrWhiteSpace($CID)) {
+        $null = & docker network connect lab-network $CID 2>&1
+        if ($LASTEXITCODE -eq 0) {
             Write-Host "    Connected container $CID" -ForegroundColor DarkGray
-        } catch {
+        } else {
             Write-Host "    Already connected: $CID" -ForegroundColor Gray
         }
     }

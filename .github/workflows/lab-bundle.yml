@@ -43,7 +43,7 @@ jobs:
         run: |
           EVENT="${{ github.event_name }}"
 
-          PREV_TAG=$(gh release list --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null || echo "")
+          PREV_TAG=$(gh release list --limit 1 --json tagName --jq '.[0].tagName // empty' 2>/dev/null || echo "")
           echo "prev_tag=${PREV_TAG}" >> $GITHUB_OUTPUT
 
           if [ "$EVENT" = "push" ]; then

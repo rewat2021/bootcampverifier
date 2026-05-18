@@ -144,3 +144,38 @@ Write-Host "  waltid issuer  : http://localhost:7002" -ForegroundColor Cyan
 Write-Host "  waltid verifier: http://localhost:7003" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "To stop all services, run: .\stop-lab.ps1"
+Write-Host ""
+
+# Verify Verifier DB seed data
+Write-Host "[5/4] Verifying Verifier database seed data..." -ForegroundColor Yellow
+$DbPass = if ($env:MYSQL_ROOT_PASSWORD) { $env:MYSQL_ROOT_PASSWORD } else { "P@ssw0rd@1234" }
+$MaxDbWait = 60
+$DbWaited  = 0
+while ($true) {
+    $null = & docker exec verifier-mysql mysqladmin ping -uroot -p"$DbPass" --silent 2>&1
+    if ($LASTEXITCODE -eq 0) { break }
+    if ($DbWaited -ge $MaxDbWait) {
+        Write-Host "  WARNING: verifier-mysql ไม่ตอบสนองใน ${MaxDbWait}s ข้ามการตรวจสอบ" -ForegroundColor Yellow
+        exit 0
+    }
+    Write-Host "  Waiting for verifier-mysql... (${DbWaited}s)" -ForegroundColor Gray
+    Start-Sleep -Seconds 5
+    $DbWaited += 5
+}
+
+$SessionCount  = (& docker exec verifier-mysql mysql -uroot -p"$DbPass" verifier --silent --skip-column-names -e "SELECT COUNT(*) FROM dbverifiersession;"  2>&1).Trim()
+$ResponseCount = (& docker exec verifier-mysql mysql -uroot -p"$DbPass" verifier --silent --skip-column-names -e "SELECT COUNT(*) FROM dbverifierresponse;" 2>&1).Trim()
+
+Write-Host ""
+Write-Host "  +--------------------------------------+" -ForegroundColor Cyan
+Write-Host "  |       Verifier DB Seed Check        |" -ForegroundColor Cyan
+Write-Host "  +----------------------+--------------+" -ForegroundColor Cyan
+Write-Host ("  | {0,-20} | {1,4} rows   |" -f "dbverifiersession",  $SessionCount)  -ForegroundColor Cyan
+Write-Host ("  | {0,-20} | {1,4} rows   |" -f "dbverifierresponse", $ResponseCount) -ForegroundColor Cyan
+Write-Host "  +----------------------+--------------+" -ForegroundColor Cyan
+if ([int]$SessionCount -gt 0 -and [int]$ResponseCount -gt 0) {
+    Write-Host "  Seed data OK" -ForegroundColor Green
+} else {
+    Write-Host "  WARNING: ไม่มีข้อมูล — MySQL อาจใช้ volume เก่า ให้รัน .\stop-lab.ps1 แล้ว start ใหม่" -ForegroundColor Yellow
+}
+Write-Host ""

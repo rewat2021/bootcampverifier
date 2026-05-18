@@ -113,3 +113,47 @@ echo "  waltid issuer  : http://localhost:7002"
 echo "  waltid verifier: http://localhost:7003"
 echo ""
 echo "To stop all services, run: ./stop-lab.sh"
+echo ""
+
+# ── ตรวจสอบ seed data ใน Verifier DB ────────────────────────────────────
+echo "[5/4] Verifying Verifier database seed data..."
+DB_PASS="${MYSQL_ROOT_PASSWORD:-P@ssw0rd@1234}"
+MAX_DB_WAIT=60
+DB_WAITED=0
+until docker exec verifier-mysql mysqladmin ping -uroot -p"$DB_PASS" --silent 2>/dev/null; do
+  if [ "$DB_WAITED" -ge "$MAX_DB_WAIT" ]; then
+    echo "  WARNING: verifier-mysql ไม่ตอบสนองใน ${MAX_DB_WAIT}s ข้ามการตรวจสอบ"
+    exit 0
+  fi
+  echo "  Waiting for verifier-mysql... (${DB_WAITED}s)"
+  sleep 5
+  DB_WAITED=$((DB_WAITED + 5))
+done
+
+RESULT=$(docker exec verifier-mysql mysql -uroot -p"$DB_PASS" verifier --silent --skip-column-names -e "
+  SELECT CONCAT(tbl, ': ', cnt, ' rows') FROM (
+    SELECT 'dbverifiersession'  AS tbl, COUNT(*) AS cnt FROM dbverifiersession
+    UNION ALL
+    SELECT 'dbverifierresponse' AS tbl, COUNT(*) AS cnt FROM dbverifierresponse
+  ) t;
+" 2>/dev/null)
+
+if [ -z "$RESULT" ]; then
+  echo "  ERROR: ไม่สามารถ query ได้ — ตรวจสอบ init.sql"
+else
+  SESSION_COUNT=$(docker exec verifier-mysql mysql -uroot -p"$DB_PASS" verifier --silent --skip-column-names -e "SELECT COUNT(*) FROM dbverifiersession;" 2>/dev/null)
+  RESPONSE_COUNT=$(docker exec verifier-mysql mysql -uroot -p"$DB_PASS" verifier --silent --skip-column-names -e "SELECT COUNT(*) FROM dbverifierresponse;" 2>/dev/null)
+  echo ""
+  echo "  ┌─────────────────────────────────────┐"
+  echo "  │       Verifier DB Seed Check        │"
+  echo "  ├──────────────────────┬──────────────┤"
+  printf "  │ %-20s │ %4s rows   │\n" "dbverifiersession"  "$SESSION_COUNT"
+  printf "  │ %-20s │ %4s rows   │\n" "dbverifierresponse" "$RESPONSE_COUNT"
+  echo "  └──────────────────────┴──────────────┘"
+  if [ "$SESSION_COUNT" -gt 0 ] && [ "$RESPONSE_COUNT" -gt 0 ]; then
+    echo "  Seed data OK"
+  else
+    echo "  WARNING: ไม่มีข้อมูล — MySQL อาจใช้ volume เก่า ให้รัน ./stop-lab.sh แล้ว start ใหม่"
+  fi
+fi
+echo ""

@@ -100,14 +100,14 @@ jobs:
         with:
           repository: ${{ github.repository_owner }}/IssuerAPI
           path: _issuer
-          token: ${{ secrets.PAT }}
+          token: ${{ secrets.PAT || github.token }}
 
       - name: Checkout waltid
         uses: actions/checkout@v4
         with:
           repository: ${{ github.repository_owner }}/waltid
           path: _waltid
-          token: ${{ secrets.PAT }}
+          token: ${{ secrets.PAT || github.token }}
 
       # ── Free disk space (~10-15 GB) ──────────────────────────────────────────
       - name: Free disk space

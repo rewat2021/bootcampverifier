@@ -98,14 +98,14 @@ jobs:
       - name: Checkout IssuerAPI
         uses: actions/checkout@v4
         with:
-          repository: ${{ github.repository_owner }}/IssuerAPI
+          repository: ${{ github.repository_owner }}/bootcampissuer
           path: _issuer
           token: ${{ secrets.PAT || github.token }}
 
       - name: Checkout waltid
         uses: actions/checkout@v4
         with:
-          repository: ${{ github.repository_owner }}/waltid
+          repository: ${{ github.repository_owner }}/bootcampwallet
           path: _waltid
           token: ${{ secrets.PAT || github.token }}
 

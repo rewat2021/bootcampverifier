@@ -121,10 +121,10 @@ if ($LASTEXITCODE -ne 0) {
 
 # Connect waltid containers to lab-network
 Write-Host "  Connecting waltid services to lab-network..."
-$WaltidContainers = & docker compose -f "$ScriptDir\waltid\docker-compose.yaml" --profile identity ps -q 2>&1
+$WaltidContainers = & docker compose -f "$ScriptDir\waltid\docker-compose.yaml" --profile identity ps -q 2>$null
 foreach ($CID in $WaltidContainers) {
     if (-not [string]::IsNullOrWhiteSpace($CID)) {
-        $null = & docker network connect lab-network $CID 2>&1
+        $null = & docker network connect lab-network $CID 2>$null
         if ($LASTEXITCODE -eq 0) {
             Write-Host "    Connected container $CID" -ForegroundColor DarkGray
         } else {

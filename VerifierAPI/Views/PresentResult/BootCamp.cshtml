@@ -29,14 +29,14 @@
                 if (root.TryGetProperty("issued", out System.Text.Json.JsonElement issued)) issuedDate = issued.GetString() ?? "-";
                 else if (root.TryGetProperty("issuanceDate", out System.Text.Json.JsonElement idate)) issuedDate = idate.GetString() ?? "-";
 
-                var skipKeys = new HashSet<string> { "_sd", "_sd_alg", "cnf", "iss", "sub", "jti", "iat", "exp", "vct", "issued", "issuanceDate" };
-                foreach (var prop in root.EnumerateObject())
-                {
-                    if (!skipKeys.Contains(prop.Name))
-                        claims[prop.Name] = prop.Value.ValueKind == System.Text.Json.JsonValueKind.String
-                            ? prop.Value.GetString() ?? ""
-                            : prop.Value.GetRawText();
-                }
+                // var skipKeys = new HashSet<string> { "_sd", "_sd_alg", "cnf", "iss", "sub", "jti", "iat", "exp", "vct", "issued", "issuanceDate" };
+                // foreach (var prop in root.EnumerateObject())
+                // {
+                //     if (!skipKeys.Contains(prop.Name))
+                //         claims[prop.Name] = prop.Value.ValueKind == System.Text.Json.JsonValueKind.String
+                //             ? prop.Value.GetString() ?? ""
+                //             : prop.Value.GetRawText();
+                // }
             }
 
             for (int i = 1; i < sdParts.Length; i++)

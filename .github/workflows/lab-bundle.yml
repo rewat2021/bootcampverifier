@@ -1,0 +1,445 @@
+name: Create Lab Bundle
+
+on:
+  push:
+    tags: ['v*']
+
+  # IssuerAPI หรือ waltid ส่ง signal มาเมื่อมี update
+  repository_dispatch:
+    types: [rebuild-issuer, rebuild-waltid]
+
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g. v1.0.0) — ปล่อยว่างเพื่อ auto-increment'
+        required: false
+        default: ''
+      rebuild_issuer:
+        description: 'Rebuild IssuerAPI from source'
+        type: boolean
+        required: false
+        default: false
+      rebuild_waltid:
+        description: 'Rebuild waltid from source'
+        type: boolean
+        required: false
+        default: false
+
+jobs:
+  # ─── 0. Resolve version and rebuild flags ────────────────────────────────
+  prepare:
+    name: Resolve version and flags
+    runs-on: ubuntu-latest
+    outputs:
+      version:        ${{ steps.rel.outputs.version }}
+      prev_tag:       ${{ steps.rel.outputs.prev_tag }}
+      rebuild_issuer: ${{ steps.rel.outputs.rebuild_issuer }}
+      rebuild_waltid: ${{ steps.rel.outputs.rebuild_waltid }}
+    steps:
+      - name: Resolve rebuild flags and version
+        id: rel
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          EVENT="${{ github.event_name }}"
+
+          PREV_TAG=$(gh release list --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null || echo "")
+          echo "prev_tag=${PREV_TAG}" >> $GITHUB_OUTPUT
+
+          if [ "$EVENT" = "push" ]; then
+            VERSION="${GITHUB_REF_NAME}"
+          elif [ "$EVENT" = "workflow_dispatch" ] && [ -n "${{ github.event.inputs.version }}" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            if [ -z "$PREV_TAG" ]; then
+              VERSION="v1.0.0"
+            else
+              BASE="${PREV_TAG#v}"
+              MAJOR="${BASE%%.*}"; REST="${BASE#*.}"
+              MINOR="${REST%%.*}"; PATCH="${REST##*.}"
+              VERSION="v${MAJOR}.${MINOR}.$((PATCH + 1))"
+            fi
+          fi
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "Resolved version: ${VERSION}"
+
+          if [ -z "$PREV_TAG" ]; then
+            echo "No previous release — forcing full rebuild"
+            echo "rebuild_issuer=true" >> $GITHUB_OUTPUT
+            echo "rebuild_waltid=true" >> $GITHUB_OUTPUT
+          elif [ "$EVENT" = "repository_dispatch" ]; then
+            TYPE="${{ github.event.action }}"
+            [ "$TYPE" = "rebuild-issuer" ] && echo "rebuild_issuer=true" >> $GITHUB_OUTPUT || echo "rebuild_issuer=false" >> $GITHUB_OUTPUT
+            [ "$TYPE" = "rebuild-waltid" ] && echo "rebuild_waltid=true" >> $GITHUB_OUTPUT || echo "rebuild_waltid=false" >> $GITHUB_OUTPUT
+          else
+            echo "rebuild_issuer=${{ github.event.inputs.rebuild_issuer || 'false' }}" >> $GITHUB_OUTPUT
+            echo "rebuild_waltid=${{ github.event.inputs.rebuild_waltid || 'false' }}"  >> $GITHUB_OUTPUT
+          fi
+
+  # ─── 1. Build everything and release ─────────────────────────────────────
+  # รวม build + release ใน job เดียว → ไม่มี artifact upload เลย
+  # ไม่เปลืองพื้นที่ artifact storage
+  build-and-release:
+    name: Build and Release
+    needs: [prepare]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN:       ${{ secrets.GITHUB_TOKEN }}
+      REBUILD_ISSUER: ${{ needs.prepare.outputs.rebuild_issuer }}
+      REBUILD_WALTID: ${{ needs.prepare.outputs.rebuild_waltid }}
+      PREV_TAG:       ${{ needs.prepare.outputs.prev_tag }}
+      VERSION:        ${{ needs.prepare.outputs.version }}
+    steps:
+      - name: Checkout VerifierAPI
+        uses: actions/checkout@v4
+
+      - name: Checkout IssuerAPI
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/IssuerAPI
+          path: _issuer
+          token: ${{ secrets.PAT }}
+
+      - name: Checkout waltid
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/waltid
+          path: _waltid
+          token: ${{ secrets.PAT }}
+
+      # ── Free disk space (~10-15 GB) ──────────────────────────────────────────
+      - name: Free disk space
+        run: |
+          echo "=== Disk before ==="
+          df -h /
+          # Remove large pre-installed toolchains we don't need
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo rm -rf /usr/local/share/boost
+          sudo rm -rf /usr/local/.ghcup
+          sudo apt-get autoremove -y >/dev/null 2>&1 || true
+          sudo apt-get clean              >/dev/null 2>&1 || true
+          docker system prune -af         >/dev/null 2>&1 || true
+          echo "=== Disk after ==="
+          df -h /
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          cache-image: false   # ปิด binfmt cache — ไม่กิน Actions storage
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          cache-binary: false  # ปิด buildx binary cache
+
+      # ── Java 22 + Gradle (เฉพาะเมื่อ rebuild_waltid) ─────────────────────
+      - name: Set up Java 22
+        if: env.REBUILD_WALTID == 'true'
+        uses: actions/setup-java@v4
+        with:
+          java-version: '22'
+          distribution: 'corretto'
+
+      - name: Setup Gradle
+        if: env.REBUILD_WALTID == 'true'
+        uses: gradle/actions/setup-gradle@v3
+
+      # ── Cache NuGet (VerifierAPI) ─────────────────────────────────────────
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ hashFiles('**/*.csproj') }}
+          restore-keys: nuget-
+
+      # ── Build waltid Gradle JARs ──────────────────────────────────────────
+      - name: Build waltid fat JARs
+        if: env.REBUILD_WALTID == 'true'
+        run: |
+          cd _waltid
+          sed -i 's/\r$//' gradlew && chmod +x gradlew
+          ./gradlew \
+            :waltid-services:waltid-wallet-api:buildFatJar \
+            :waltid-services:waltid-issuer-api:buildFatJar \
+            :waltid-services:waltid-verifier-api:buildFatJar \
+            :waltid-services:waltid-verifier-api2:buildFatJar \
+            --no-daemon
+          mkdir -p ../_jars
+          cp waltid-services/waltid-wallet-api/build/libs/*-all.jar    ../_jars/waltid-wallet-api.jar
+          cp waltid-services/waltid-issuer-api/build/libs/*-all.jar    ../_jars/waltid-issuer-api.jar
+          cp waltid-services/waltid-verifier-api/build/libs/*-all.jar  ../_jars/waltid-verifier-api.jar
+          cp waltid-services/waltid-verifier-api2/build/libs/*-all.jar ../_jars/waltid-verifier-api2.jar
+
+      # ── VerifierAPI (always rebuild) ──────────────────────────────────────
+      - name: Build VerifierAPI (amd64 + arm64)
+        run: |
+          docker buildx build --platform linux/amd64 -t verifier-api:amd64 --load .
+          docker save verifier-api:amd64 | gzip > verifier-api-linux-amd64.tar.gz
+          docker rmi verifier-api:amd64
+
+          docker buildx build --platform linux/arm64 -t verifier-api:arm64 --load .
+          docker save verifier-api:arm64 | gzip > verifier-api-linux-arm64.tar.gz
+          docker rmi verifier-api:arm64
+          docker buildx prune -f
+
+      # ── IssuerAPI — reuse from release หรือ build ถ้าไม่มี ────────────────
+      - name: Get IssuerAPI images (reuse or build)
+        run: |
+          REUSED=false
+          if [ "$REBUILD_ISSUER" != "true" ] && [ -n "$PREV_TAG" ]; then
+            echo "Trying to reuse IssuerAPI from release ${PREV_TAG}..."
+            if gh release download "${PREV_TAG}" \
+                --pattern "issuer-api-linux-amd64.tar.gz" \
+                --pattern "issuer-api-linux-arm64.tar.gz" \
+                --clobber 2>/dev/null; then
+              echo "✓ Reused IssuerAPI from ${PREV_TAG}"
+              REUSED=true
+            else
+              echo "Download failed — will build IssuerAPI from source"
+            fi
+          fi
+
+          if [ "$REUSED" = "false" ]; then
+            docker buildx build --platform linux/amd64 -t issuer-api:amd64 --load _issuer/
+            docker save issuer-api:amd64 | gzip > issuer-api-linux-amd64.tar.gz
+            docker rmi issuer-api:amd64
+
+            docker buildx build --platform linux/arm64 -t issuer-api:arm64 --load _issuer/
+            docker save issuer-api:arm64 | gzip > issuer-api-linux-arm64.tar.gz
+            docker rmi issuer-api:arm64
+            docker buildx prune -f
+          fi
+
+      # ── waltid Java images — reuse หรือ build ────────────────────────────
+      - name: Get waltid Java images (reuse or build)
+        run: |
+          JAVA_IMAGES="waltid-wallet-api waltid-issuer-api waltid-verifier-api waltid-verifier-api2"
+          REUSED=false
+
+          if [ "$REBUILD_WALTID" != "true" ] && [ -n "$PREV_TAG" ]; then
+            echo "Trying to reuse waltid Java images from release ${PREV_TAG}..."
+            PATTERNS=""
+            for NAME in $JAVA_IMAGES; do
+              PATTERNS="$PATTERNS --pattern ${NAME}-linux-amd64.tar.gz --pattern ${NAME}-linux-arm64.tar.gz"
+            done
+            if gh release download "${PREV_TAG}" $PATTERNS --clobber 2>/dev/null; then
+              echo "✓ Reused waltid Java images from ${PREV_TAG}"
+              REUSED=true
+            else
+              echo "Download failed — will build waltid Java images from source"
+            fi
+          fi
+
+          if [ "$REUSED" = "false" ]; then
+            build_java() {
+              local NAME=$1 IMAGE=$2 PORT=$3 WORKDIR=$4
+              cp "_jars/${NAME}.jar" app.jar
+              for ARCH in amd64 arm64; do
+                cat > Dockerfile.tmp << DEOF
+          FROM --platform=linux/${ARCH} amazoncorretto:22
+          WORKDIR ${WORKDIR}
+          RUN yum install -y shadow-utils && groupadd -r app && useradd -r -g app -u 10001 app && yum clean all
+          COPY app.jar ${WORKDIR}/app.jar
+          USER app
+          EXPOSE ${PORT}
+          ENTRYPOINT ["java","-jar","${WORKDIR}/app.jar"]
+          DEOF
+                docker buildx build --platform linux/${ARCH} -t "${IMAGE}:${ARCH}" -f Dockerfile.tmp --load .
+                docker save "${IMAGE}:${ARCH}" | gzip > "${NAME}-linux-${ARCH}.tar.gz"
+                docker rmi "${IMAGE}:${ARCH}"
+              done
+              rm -f app.jar Dockerfile.tmp
+              docker buildx prune -f
+            }
+            build_java "waltid-wallet-api"    "waltid/wallet-api"    7001 "/waltid-wallet-api"
+            build_java "waltid-issuer-api"    "waltid/issuer-api"    7002 "/waltid-issuer-api"
+            build_java "waltid-verifier-api"  "waltid/verifier-api"  7003 "/waltid-verifier-api"
+            build_java "waltid-verifier-api2" "waltid/verifier-api2" 7004 "/waltid-verifier-api2"
+          fi
+
+      # ── waltid Node images — reuse หรือ build ────────────────────────────
+      # JS output ไม่ขึ้นกับ arch: build บน amd64 ครั้งเดียว extract output
+      # แล้ว wrap ด้วย FROM node:20-alpine ของแต่ละ arch (ไม่รัน npm ผ่าน QEMU)
+      - name: Get waltid Node images (reuse or build)
+        run: |
+          NODE_IMAGES="waltid-portal waltid-demo-wallet waltid-dev-wallet"
+          REUSED=false
+
+          if [ "$REBUILD_WALTID" != "true" ] && [ -n "$PREV_TAG" ]; then
+            echo "Trying to reuse waltid Node images from release ${PREV_TAG}..."
+            PATTERNS=""
+            for NAME in $NODE_IMAGES; do
+              PATTERNS="$PATTERNS --pattern ${NAME}-linux-amd64.tar.gz --pattern ${NAME}-linux-arm64.tar.gz"
+            done
+            if gh release download "${PREV_TAG}" $PATTERNS --clobber 2>/dev/null; then
+              echo "✓ Reused waltid Node images from ${PREV_TAG}"
+              REUSED=true
+            else
+              echo "Download failed — will build waltid Node images from source"
+            fi
+          fi
+
+          if [ "$REUSED" = "false" ]; then
+            package_node() {
+              local NAME=$1 IMAGE=$2 PORT=$3 CMD=$4 CTX=$5
+              for ARCH in amd64 arm64; do
+                cat > Dockerfile.node << DEOF
+          FROM --platform=linux/${ARCH} node:20-alpine
+          RUN addgroup -g 10001 -S appgroup && adduser -u 10001 -S appuser -G appgroup
+          COPY --chown=appuser:appgroup . /app/
+          RUN rm -rf /app/node_modules/sharp 2>/dev/null || true
+          WORKDIR /app
+          USER appuser
+          EXPOSE ${PORT}
+          CMD ${CMD}
+          DEOF
+                docker buildx build --platform linux/${ARCH} -t "${IMAGE}:${ARCH}" -f Dockerfile.node "${CTX}/" --load
+                docker save "${IMAGE}:${ARCH}" | gzip > "${NAME}-linux-${ARCH}.tar.gz"
+                docker rmi "${IMAGE}:${ARCH}"
+              done
+              rm -f Dockerfile.node
+              docker buildx prune -f
+            }
+
+            build_node_app() {
+              local APP_NAME=$1 DOCKERFILE=$2 TMP_NAME=$3
+              docker buildx build --platform linux/amd64 -t "waltid/${TMP_NAME}:build" --load \
+                -f "${DOCKERFILE}" _waltid/
+              docker create --name "tmp-${TMP_NAME}" "waltid/${TMP_NAME}:build"
+              mkdir -p "${TMP_NAME}-ctx"
+              docker cp "tmp-${TMP_NAME}:/app/." "${TMP_NAME}-ctx/"
+              docker rm "tmp-${TMP_NAME}"
+              docker rmi "waltid/${TMP_NAME}:build"
+              docker buildx prune -f
+            }
+
+            # portal (Next.js)
+            build_node_app "portal" "_waltid/waltid-applications/waltid-web-portal/Dockerfile" "portal"
+            package_node "waltid-portal" "waltid/portal" 7102 '["node","server.js"]' "portal-ctx"
+
+            # demo-wallet (Nuxt)
+            build_node_app "demo-wallet" "_waltid/waltid-applications/waltid-web-wallet/apps/waltid-demo-wallet/Dockerfile" "demo-wallet"
+            package_node "waltid-demo-wallet" "waltid/waltid-demo-wallet" 7101 '["node","server/index.mjs"]' "demo-wallet-ctx"
+
+            # dev-wallet (Nuxt)
+            build_node_app "dev-wallet" "_waltid/waltid-applications/waltid-web-wallet/apps/waltid-dev-wallet/Dockerfile" "dev-wallet"
+            package_node "waltid-dev-wallet" "waltid/waltid-dev-wallet" 7104 '["node","server/index.mjs"]' "dev-wallet-ctx"
+          fi
+
+      # ── Bundle ────────────────────────────────────────────────────────────
+      - name: Create lab bundle
+        run: |
+          BUNDLE="lab-${VERSION}"
+
+          mkdir -p ${BUNDLE}/verifier/db
+          mkdir -p ${BUNDLE}/issuer/db
+          mkdir -p ${BUNDLE}/waltid
+
+          # VerifierAPI
+          cp docker-compose.lab.yml ${BUNDLE}/verifier/docker-compose.yml
+          cp db/init.sql            ${BUNDLE}/verifier/db/init.sql
+          printf '%s\n' \
+            'CONNECTION_STRING=server=verifier-mysql;port=3306;database=verifier;user=root;password=P@ssw0rd@1234;SslMode=None;AllowPublicKeyRetrieval=True' \
+            'MYSQL_ROOT_PASSWORD=P@ssw0rd@1234' \
+            'ASPNETCORE_ENVIRONMENT=Production' \
+            'BASE_URL=http://localhost:5001' \
+            'INTERNAL_BASE_URL=http://verifier-api:8080' \
+            'ISSUER_BASE_URL=http://issuer-api:8080' \
+            'ISSUER_PUBLIC_URL=http://localhost:5002' \
+            > ${BUNDLE}/verifier/.env
+
+          # IssuerAPI
+          cp _issuer/docker-compose.lab.yml ${BUNDLE}/issuer/docker-compose.yml
+          cp _issuer/db/init.sql            ${BUNDLE}/issuer/db/init.sql
+          printf '%s\n' \
+            'CONNECTION_STRING=server=issuer-mysql;port=3306;database=issuer;user=root;password=P@ssw0rd@1234;SslMode=None;AllowPublicKeyRetrieval=True' \
+            'MYSQL_ROOT_PASSWORD=P@ssw0rd@1234' \
+            'ASPNETCORE_ENVIRONMENT=Production' \
+            'BASE_URL=http://localhost:5002' \
+            'INTERNAL_BASE_URL=http://issuer-api:8080' \
+            > ${BUNDLE}/issuer/.env
+
+          # waltid
+          cp -r _waltid/docker-compose/. ${BUNDLE}/waltid/
+          sed -i 's/^VERSION_TAG=.*/VERSION_TAG=latest/' ${BUNDLE}/waltid/.env
+
+          # Scripts
+          cp lab/start-lab.sh lab/stop-lab.sh lab/start-lab.ps1 lab/stop-lab.ps1 \
+             lab/start-lab.cmd lab/stop-lab.cmd ${BUNDLE}/
+          chmod +x ${BUNDLE}/start-lab.sh ${BUNDLE}/stop-lab.sh
+
+          # README — copy จาก lab/README.md โดยตรง
+          cp lab/README.md ${BUNDLE}/README.md
+
+          # สร้าง bundle แยกตาม arch — images อยู่ใน bundle แล้ว
+          for ARCH in amd64 arm64; do
+            ARCH_BUNDLE="${BUNDLE}-${ARCH}"
+            cp -r "${BUNDLE}" "${ARCH_BUNDLE}"
+            mkdir -p "${ARCH_BUNDLE}/images"
+            cp *-linux-${ARCH}.tar.gz "${ARCH_BUNDLE}/images/"
+            tar -czf "${ARCH_BUNDLE}.tar.gz" "${ARCH_BUNDLE}/"
+            zip -r   "${ARCH_BUNDLE}.zip"    "${ARCH_BUNDLE}/"
+          done
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.VERSION }}
+          name: Lab Release ${{ env.VERSION }}
+          body: |
+            ## Download ไฟล์เดียว รันได้เลย — ไม่ต้อง download images แยก
+
+            | เครื่อง | ไฟล์ |
+            |---------|------|
+            | 🍎 Apple Silicon (M1/M2/M3) | `lab-${{ env.VERSION }}-arm64.tar.gz` |
+            | 🐧 Linux ARM64 | `lab-${{ env.VERSION }}-arm64.tar.gz` |
+            | 💻 macOS Intel / Linux x86_64 | `lab-${{ env.VERSION }}-amd64.tar.gz` |
+            | 🪟 Windows | `lab-${{ env.VERSION }}-amd64.zip` |
+
+            ```bash
+            # macOS / Linux
+            tar -xzf lab-*-arm64.tar.gz
+            cd lab-*-arm64/
+            chmod +x start-lab.sh && ./start-lab.sh
+            ```
+            ```batch
+            :: Windows — แตก lab-*-amd64.zip แล้ว double-click หรือรันใน CMD:
+            start-lab.cmd
+            ```
+            > **หมายเหตุ Windows**: ใช้ `start-lab.cmd` — ไม่ต้องแก้ Execution Policy
+            > หากใช้ PowerShell โดยตรง: `powershell -ExecutionPolicy Bypass -File .\start-lab.ps1`
+
+            | Service | URL |
+            |---------|-----|
+            | VerifierAPI | http://localhost:5001/swagger |
+            | IssuerAPI | http://localhost:5002/swagger |
+            | waltid wallet | http://localhost:7101 |
+            | waltid portal | http://localhost:7102 |
+            | waltid issuer | http://localhost:7002 |
+            | waltid verifier | http://localhost:7003 |
+          files: |
+            lab-${{ env.VERSION }}-amd64.tar.gz
+            lab-${{ env.VERSION }}-amd64.zip
+            lab-${{ env.VERSION }}-arm64.tar.gz
+            lab-${{ env.VERSION }}-arm64.zip
+            issuer-api-linux-amd64.tar.gz
+            issuer-api-linux-arm64.tar.gz
+            waltid-wallet-api-linux-amd64.tar.gz
+            waltid-wallet-api-linux-arm64.tar.gz
+            waltid-issuer-api-linux-amd64.tar.gz
+            waltid-issuer-api-linux-arm64.tar.gz
+            waltid-verifier-api-linux-amd64.tar.gz
+            waltid-verifier-api-linux-arm64.tar.gz
+            waltid-verifier-api2-linux-amd64.tar.gz
+            waltid-verifier-api2-linux-arm64.tar.gz
+            waltid-portal-linux-amd64.tar.gz
+            waltid-portal-linux-arm64.tar.gz
+            waltid-demo-wallet-linux-amd64.tar.gz
+            waltid-demo-wallet-linux-arm64.tar.gz
+            waltid-dev-wallet-linux-amd64.tar.gz
+            waltid-dev-wallet-linux-arm64.tar.gz

@@ -1,0 +1,42 @@
+services:
+  verifier-mysql:
+    image: mysql:8.0
+    container_name: verifier-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-P@ssw0rd@1234}
+      MYSQL_DATABASE: verifier
+    volumes:
+      - verifier-mysql-data:/var/lib/mysql
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "3307:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p${MYSQL_ROOT_PASSWORD:-P@ssw0rd@1234}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - lab-network
+
+  verifier-api:
+    image: verifier-api:latest
+    container_name: verifier-api
+    ports:
+      - "5001:8080"
+    env_file:
+      - .env
+    depends_on:
+      verifier-mysql:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - lab-network
+
+volumes:
+  verifier-mysql-data:
+
+networks:
+  lab-network:
+    external: true

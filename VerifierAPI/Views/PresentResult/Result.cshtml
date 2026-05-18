@@ -1,0 +1,579 @@
+﻿@using VerifierAPI.Databases;
+@using System.Linq;
+@{
+    ViewData["Title"] = "ผลการตรวจสอบ Verifiable Credential";
+
+    var claims = new Dictionary<string, string>();
+    string issuerDid = "-";
+    string holderDid = "-";
+    string issuedDate = "-";
+    string jtiId = "-";
+
+    if (Model?.VcPayload != null)
+    {
+        try
+        {
+            var vcPayload = Model.VcPayload.Trim();
+            var sdParts = vcPayload.Split('~');
+
+            // Decode JWT payload
+            var jwtParts = sdParts[0].Split('.');
+            if (jwtParts.Length >= 2)
+            {
+                var payloadJson = System.Text.Encoding.UTF8.GetString(
+                    Microsoft.AspNetCore.WebUtilities.WebEncoders.Base64UrlDecode(jwtParts[1]));
+                var root = System.Text.Json.JsonDocument.Parse(payloadJson).RootElement;
+
+                // ดึง metadata
+                if (root.TryGetProperty("iss", out System.Text.Json.JsonElement  iss)) issuerDid = iss.GetString() ?? "-";
+                if (root.TryGetProperty("sub", out System.Text.Json.JsonElement sub)) holderDid = sub.GetString() ?? "-";
+                if (root.TryGetProperty("jti", out System.Text.Json.JsonElement jti)) jtiId = jti.GetString() ?? "-";
+                if (root.TryGetProperty("issued", out System.Text.Json.JsonElement issued)) issuedDate = issued.GetString() ?? "-";
+                else if (root.TryGetProperty("issuanceDate", out System.Text.Json.JsonElement idate)) issuedDate = idate.GetString() ?? "-";
+
+                // Non-SD claims
+                var skipKeys = new HashSet<string> { "_sd", "_sd_alg", "cnf", "iss", "sub", "jti", "iat", "exp", "vct", "issued", "issuanceDate" };
+                foreach (var prop in root.EnumerateObject())
+                {
+                    if (!skipKeys.Contains(prop.Name))
+                        claims[prop.Name] = prop.Value.ValueKind == System.Text.Json.JsonValueKind.String
+                            ? prop.Value.GetString() ?? ""
+                            : prop.Value.GetRawText();
+                }
+            }
+
+            // Decode disclosures
+            for (int i = 1; i < sdParts.Length; i++)
+            {
+                var disc = sdParts[i];
+                if (string.IsNullOrEmpty(disc)) continue;
+                if (disc.Contains('.')) continue;
+
+                try
+                {
+                    var decoded = System.Text.Encoding.UTF8.GetString(
+                        Microsoft.AspNetCore.WebUtilities.WebEncoders.Base64UrlDecode(disc));
+                    var arr = System.Text.Json.JsonDocument.Parse(decoded).RootElement;
+                    if (arr.GetArrayLength() >= 3)
+                    {
+                        var name = arr[1].GetString();
+                        var val = arr[2].ValueKind == System.Text.Json.JsonValueKind.String
+                            ? arr[2].GetString() ?? ""
+                            : arr[2].GetRawText();
+                        if (name != null) claims[name] = val;
+                    }
+                }
+                catch { }
+            }
+        }
+        catch { }
+    }
+
+    string C(string key, string fallback = "-") => claims.TryGetValue(key, out var v) ? v : fallback;
+}
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>@ViewData["Title"]</title>
+    <link href="https://fonts.googleapis.com/css2?family=Anuphan:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+    <style>
+        :root {
+            --navy: #0a1628;
+            --navy2: #112240;
+            --navy3: #1d3461;
+            --blue: #2563eb;
+            --blue-light: #60a5fa;
+            --cyan: #06b6d4;
+            --teal: #14b8a6;
+            --green: #22c55e;
+            --gold: #f59e0b;
+            --white: #f0f6ff;
+            --muted: #94a3b8;
+            --border: rgba(96,165,250,0.2);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Anuphan', sans-serif;
+            background: var(--navy);
+            color: var(--white);
+            min-height: 100vh;
+            padding: 2rem 1rem 4rem;
+        }
+            /* Grid background */
+            body::before {
+                content: '';
+                position: fixed;
+                inset: 0;
+                background-image: linear-gradient(rgba(37,99,235,0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(37,99,235,0.05) 1px, transparent 1px);
+                background-size: 40px 40px;
+                pointer-events: none;
+                z-index: 0;
+            }
+
+        .container {
+            max-width: 860px;
+            margin: 0 auto;
+            position: relative;
+            z-index: 1;
+        }
+
+        /* Header */
+        .header {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            margin-bottom: 2rem;
+            padding-bottom: 1.5rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .header-icon {
+            width: 52px;
+            height: 52px;
+            background: linear-gradient(135deg, var(--blue), var(--cyan));
+            border-radius: 14px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.6rem;
+            box-shadow: 0 0 24px rgba(37,99,235,0.4);
+            flex-shrink: 0;
+        }
+
+        .header h1 {
+            font-size: 1.25rem;
+            font-weight: 700;
+            color: var(--white);
+        }
+
+        .header p {
+            font-size: .75rem;
+            color: var(--blue-light);
+            font-family: 'IBM Plex Mono', monospace;
+            margin-top: 2px;
+        }
+
+        /* Status banner */
+        .status-banner {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            background: linear-gradient(135deg, rgba(20,184,166,0.15), rgba(34,197,94,0.1));
+            border: 1px solid rgba(20,184,166,0.4);
+            border-radius: 10px;
+            padding: .8rem 1.25rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: var(--green);
+            box-shadow: 0 0 10px var(--green);
+            animation: pulse 2s infinite;
+            flex-shrink: 0;
+        }
+
+        @@keyframes pulse {
+            0%, 100% {
+                opacity: 1;
+                box-shadow: 0 0 10px var(--green);
+            }
+
+            50% {
+                opacity: .7;
+                box-shadow: 0 0 20px var(--green);
+            }
+        }
+
+        .status-text {
+            font-size: .875rem;
+            font-weight: 600;
+            color: var(--teal);
+        }
+
+        .status-session {
+            margin-left: auto;
+            font-size: .7rem;
+            color: var(--muted);
+            font-family: 'IBM Plex Mono', monospace;
+        }
+
+        /* Tags */
+        .tags {
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+            margin-bottom: 1.5rem;
+        }
+
+        .tag {
+            font-size: .7rem;
+            font-weight: 500;
+            padding: 3px 12px;
+            border-radius: 20px;
+            border: 1px solid;
+        }
+
+        .tag-blue {
+            background: rgba(37,99,235,0.15);
+            color: var(--blue-light);
+            border-color: rgba(37,99,235,0.4);
+        }
+
+        .tag-teal {
+            background: rgba(20,184,166,0.15);
+            color: var(--teal);
+            border-color: rgba(20,184,166,0.4);
+        }
+
+        .tag-gold {
+            background: rgba(245,158,11,0.15);
+            color: var(--gold);
+            border-color: rgba(245,158,11,0.4);
+        }
+
+        /* Card */
+        .card {
+            background: var(--navy2);
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            margin-bottom: 1.25rem;
+            overflow: hidden;
+        }
+
+        .card-head {
+            background: var(--navy3);
+            padding: .65rem 1.25rem;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .card-head-title {
+            font-size: .8rem;
+            font-weight: 600;
+            color: var(--blue-light);
+        }
+
+        .badge-ok {
+            margin-left: auto;
+            font-size: .65rem;
+            font-weight: 700;
+            background: rgba(34,197,94,0.2);
+            color: var(--green);
+            border: 1px solid rgba(34,197,94,0.4);
+            padding: 2px 10px;
+            border-radius: 4px;
+            letter-spacing: .04em;
+        }
+
+        .card-body {
+            padding: 1.25rem;
+        }
+
+        /* Field grid */
+        .field-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 12px;
+        }
+
+        .field {
+            background: rgba(10,22,40,0.6);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: .75rem 1rem;
+        }
+
+            .field label {
+                display: block;
+                font-size: .65rem;
+                font-weight: 500;
+                color: var(--muted);
+                text-transform: uppercase;
+                letter-spacing: .06em;
+                margin-bottom: 4px;
+            }
+
+            .field .val {
+                font-size: .875rem;
+                font-weight: 500;
+                color: var(--white);
+            }
+
+                .field .val.mono {
+                    font-family: 'IBM Plex Mono', monospace;
+                    font-size: .65rem;
+                    color: var(--blue-light);
+                    word-break: break-all;
+                    font-weight: 400;
+                }
+
+            .field.full {
+                grid-column: 1 / -1;
+            }
+
+        /* Student hero */
+        .student-hero {
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+            margin-bottom: 1.25rem;
+        }
+
+        .avatar {
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, var(--blue), var(--cyan));
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.4rem;
+            font-weight: 700;
+            color: white;
+            box-shadow: 0 0 20px rgba(37,99,235,0.3);
+            flex-shrink: 0;
+        }
+
+        .student-name {
+            font-size: 1.1rem;
+            font-weight: 700;
+            color: var(--white);
+        }
+
+        .student-id {
+            font-size: .75rem;
+            color: var(--muted);
+            font-family: 'IBM Plex Mono', monospace;
+            margin-top: 2px;
+        }
+
+        /* GPA highlight */
+        .gpa-box {
+            background: linear-gradient(135deg, rgba(37,99,235,0.2), rgba(6,182,212,0.1));
+            border: 1px solid rgba(37,99,235,0.4);
+            border-radius: 10px;
+            padding: 1rem;
+            text-align: center;
+        }
+
+            .gpa-box .gpa-label {
+                font-size: .65rem;
+                color: var(--muted);
+                text-transform: uppercase;
+                letter-spacing: .08em;
+            }
+
+            .gpa-box .gpa-value {
+                font-size: 2rem;
+                font-weight: 700;
+                color: var(--blue-light);
+                font-family: 'IBM Plex Mono', monospace;
+                line-height: 1;
+                margin-top: 4px;
+            }
+
+        /* DID field */
+        .did-field {
+            background: rgba(10,22,40,0.8);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: .6rem 1rem;
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: .65rem;
+            color: var(--blue-light);
+            word-break: break-all;
+            margin-top: 8px;
+        }
+
+        .did-label {
+            font-size: .65rem;
+            color: var(--muted);
+            text-transform: uppercase;
+            letter-spacing: .06em;
+            margin-top: .75rem;
+        }
+
+        /* Footer */
+        .footer {
+            background: var(--navy3);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: .75rem 1.25rem;
+            display: flex;
+            gap: 1.5rem;
+            flex-wrap: wrap;
+            align-items: center;
+            margin-top: 1.5rem;
+        }
+
+        .footer-item {
+            font-size: .7rem;
+            color: var(--muted);
+        }
+
+            .footer-item span {
+                font-family: 'IBM Plex Mono', monospace;
+                color: var(--blue-light);
+            }
+
+            .footer-item.ml {
+                margin-left: auto;
+            }
+
+        /* Empty state */
+        .empty {
+            text-align: center;
+            padding: 3rem;
+            color: var(--muted);
+            font-size: .875rem;
+        }
+
+        /* Animate in */
+        .card {
+            animation: fadeUp .4s ease both;
+        }
+
+            .card:nth-child(1) {
+                animation-delay: .05s;
+            }
+
+            .card:nth-child(2) {
+                animation-delay: .1s;
+            }
+
+            .card:nth-child(3) {
+                animation-delay: .15s;
+            }
+
+        @@keyframes fadeUp {
+            from {
+                opacity: 0;
+                transform: translateY(12px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+
+        <!-- Header -->
+        <div class="header">
+            <div class="header-icon">🎓</div>
+            <div>
+                <h1>Verifiable Presentation Result</h1>
+                <p>ETDA Digital Credential Verification · dc+sd-jwt</p>
+            </div>
+        </div>
+
+        <!-- Status -->
+        <div class="status-banner">
+            <div class="status-dot"></div>
+            <span class="status-text">✓ ตรวจสอบสำเร็จ — Credential ถูกต้องและเชื่อถือได้</span>
+            <span class="status-session">Session: @Model?.SessionId?.Substring(0, Math.Min(8, Model?.SessionId?.Length ?? 0))...</span>
+        </div>
+
+        <!-- Tags -->
+        <div class="tags">
+            <span class="tag tag-teal">🔐 EdDSA Signed</span>
+            <span class="tag tag-blue">dc+sd-jwt</span>
+            <span class="tag tag-blue">TranscriptCredential</span>
+            <span class="tag tag-gold">Selective Disclosure</span>
+        </div>
+
+        @if (claims.Count == 0)
+        {
+            <div class="card"><div class="empty">ไม่พบข้อมูล VC Payload</div></div>
+        }
+        else
+        {
+            <!-- Student Info -->
+            <div class="card">
+                <div class="card-head">
+                    <span class="card-head-title">👤 ข้อมูลนักศึกษา</span>
+                    <span class="badge-ok">✓ VERIFIED</span>
+                </div>
+                <div class="card-body">
+                    <div class="student-hero">
+                        <div class="avatar">👤</div>
+                        <div>
+                            <div class="student-name">@C("full_name")</div>
+                            <div class="student-id">รหัส: @C("student_id")</div>
+                            
+                        </div>
+                        <div class="gpa-box" style="margin-left:auto;">
+                            <div class="gpa-label">GPA</div>
+                            <div class="gpa-value">@C("gpa")</div>
+                        </div>
+                    </div>
+                    <div class="field-grid">
+                        <div class="field">
+                            <label>คณะ / สาขาวิชา</label>
+                            <div class="val">@C("faculty")</div>
+                        </div>
+                        <div class="field">
+                            <label>วุฒิการศึกษา</label>
+                            <div class="val">@C("degree")</div>
+                        </div>
+                        <div class="field">
+                            <label>วันสำเร็จการศึกษา</label>
+                            <div class="val">@C("graduation_date")</div>
+                        </div>
+                        <div class="field">
+                            <label>สถาบัน</label>
+                            <div class="val">@C("institution_name")</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Issuer & Credential -->
+            <div class="card">
+                <div class="card-head">
+                    <span class="card-head-title">🏛 ข้อมูล Credential</span>
+                </div>
+                <div class="card-body">
+                    <div class="field-grid">
+                        <div class="field">
+                            <label>วันที่ออก</label>
+                            <div class="val">@issuedDate</div>
+                        </div>
+                        <div class="field full">
+                            <label>Credential ID</label>
+                            <div class="val mono">@jtiId</div>
+                        </div>
+                    </div>
+                    <div class="did-label">Issuer DID</div>
+                    <div class="did-field">@issuerDid</div>
+                    <div class="did-label">Holder DID</div>
+                    <div class="did-field">@holderDid</div>
+                </div>
+            </div>
+        }
+
+        <!-- Footer -->
+        <div class="footer">
+            <div class="footer-item">🔐 Session: <span>@Model?.SessionId</span></div>
+            <div class="footer-item ml">🕐 <span>@Model?.ReceivedAt.ToString("dd/MM/yyyy HH:mm:ss") น.</span></div>
+        </div>
+
+    </div>
+</body>
+</html>

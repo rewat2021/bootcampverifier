@@ -1,0 +1,6 @@
+@VerifierAPI_HostAddress = http://localhost:5111
+
+GET {{VerifierAPI_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

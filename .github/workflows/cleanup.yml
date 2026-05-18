@@ -1,0 +1,56 @@
+name: Cleanup old workflow runs
+
+on:
+  schedule:
+    # รันทุกสัปดาห์ วันอาทิตย์ 00:00 UTC
+    - cron: '0 0 * * 0'
+  workflow_dispatch:
+
+jobs:
+  cleanup:
+    name: Delete old runs and artifacts
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Delete old workflow runs (keep last 5)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          REPO="${{ github.repository }}"
+          echo "Cleaning up old workflow runs for $REPO"
+
+          # ลบ runs ที่ completed ทิ้ง เก็บไว้แค่ 5 run ล่าสุดต่อ workflow
+          gh api --paginate "repos/$REPO/actions/workflows" --jq '.workflows[].id' | while read WF_ID; do
+            WF_NAME=$(gh api "repos/$REPO/actions/workflows/$WF_ID" --jq '.name')
+            echo "  Workflow: $WF_NAME (id=$WF_ID)"
+            # ดึง run ids ทั้งหมด ยกเว้น 5 อันล่าสุด
+            gh api --paginate "repos/$REPO/actions/workflows/$WF_ID/runs" \
+              --jq '.workflow_runs | sort_by(.created_at) | reverse | .[5:] | .[].id' \
+              | while read RUN_ID; do
+                echo "    Deleting run $RUN_ID"
+                gh api --method DELETE "repos/$REPO/actions/runs/$RUN_ID" 2>/dev/null || true
+              done
+          done
+
+      - name: Delete all remaining artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          REPO="${{ github.repository }}"
+          gh api --paginate "repos/$REPO/actions/artifacts" --jq '.artifacts[].id' \
+            | while read ID; do
+                gh api --method DELETE "repos/$REPO/actions/artifacts/$ID" 2>/dev/null || true
+              done
+          echo "Done artifacts"
+
+      - name: Delete all Actions caches
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          REPO="${{ github.repository }}"
+          gh api --paginate "repos/$REPO/actions/caches" --jq '.actions_caches[].id' \
+            | while read ID; do
+                gh api --method DELETE "repos/$REPO/actions/caches/$ID" 2>/dev/null || true
+              done
+          echo "Done caches"

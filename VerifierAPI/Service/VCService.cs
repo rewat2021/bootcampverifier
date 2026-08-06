@@ -17,6 +17,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using VerifierAPI.Databases;
 using VerifierAPI.Models;
 
 
@@ -837,6 +838,166 @@ namespace VerifierAPI.Service
                 //logger.Error($"GetVctFromSdJwt error: {ex.Message}");
                 return null;
             }
+        }
+        public object BuildDcqlQuery(Dbdocumenttype docType, HttpRequest Request)
+        {
+            var vcTypes = JsonConvert.DeserializeObject<string[]>(docType.VcType)
+                          ?? throw new InvalidOperationException($"VcType invalid: {docType.VcType}");
+
+            string format = docType.Format?.ToLower();
+            string issuerBaseUrl = Environment.GetEnvironmentVariable("ISSUER_BASE_URL")
+              ?? Environment.GetEnvironmentVariable("INTERNAL_BASE_URL")
+              ?? Environment.GetEnvironmentVariable("IssuerUrl")
+              ?? $"{Request.Scheme}://{Request.Host}";
+            if (format == "dc+sd-jwt")
+            {
+                var claimPaths = GetClaimsByDocType(docType.DocType);
+                // SD-JWT ใช้ vct_values — เอา type สุดท้าย เช่น "TranscriptCredential"
+                return new
+                {
+                    credentials = new[]
+                    {
+                        new
+                        {
+                            id     = docType.DocType,
+                            format = format,
+                            meta   = new
+                            {
+                                vct_values = new[] { issuerBaseUrl + "/credentials/" + docType.Endpoint }
+                            },
+                            claims = claimPaths
+                        }
+                    }
+                };
+            }
+
+            // jwt_vc_json ใช้ type_values
+            return new
+            {
+                credentials = new[]
+                {
+                    new
+                    {
+                        id     = docType.DocType,
+                        format = format,
+                        meta   = new
+                        {
+                            type_values = new[] { vcTypes.LastOrDefault() }
+                        }
+                    }
+                }
+            };
+        }
+
+        public object BuildDcqlQuery(string type_id, HttpRequest Request)
+        {
+            // แนะนำ: ควร inject DBService ผ่าน constructor แทนการ new ตรงนี้
+            // (ตอนนี้ new ตรง ๆ ทำงานได้ แต่ผูก dependency แน่นเกินไป ทดสอบยาก
+            //  และอาจพลาด connection string / DI configuration ที่ควรมาจาก IConfiguration)
+            DBService dbServ = new DBService();
+            Dbdocumenttype dbType = dbServ.GetRequestByDocType(type_id);
+
+            // เพิ่ม null check ให้ครบ — ไม่งั้น compile ไม่ผ่าน (CS0161)
+            if (dbType == null)
+            {
+                throw new InvalidOperationException($"ไม่พบ document type: {type_id} ใน database");
+            }
+
+            var vcTypes = JsonConvert.DeserializeObject<string[]>(dbType.VcType)
+                      ?? throw new InvalidOperationException($"VcType invalid: {dbType.VcType}");
+
+            // แก้จาก dbType.DocType เป็น dbType.Format — เดิมใช้ผิด field
+            // ทำให้เงื่อนไข dc+sd-jwt ด้านล่างไม่มีทาง true ได้เลย
+            string format = dbType.Format?.ToLower();
+
+            string issuerBaseUrl = Environment.GetEnvironmentVariable("ISSUER_BASE_URL")
+              ?? Environment.GetEnvironmentVariable("INTERNAL_BASE_URL")
+              ?? Environment.GetEnvironmentVariable("IssuerUrl")
+              ?? $"{Request.Scheme}://{Request.Host}";
+
+            if (format == "dc+sd-jwt")
+            {
+                var claimPaths = GetClaimsByDocType(dbType.DocType);
+                // SD-JWT ใช้ vct_values — เอา type สุดท้าย เช่น "TranscriptCredential"
+                return new
+                {
+                    credentials = new[]
+                    {
+                        new
+                        {
+                            id     = dbType.DocType,
+                            format = format,
+                            meta   = new
+                            {
+                                vct_values = new[] { issuerBaseUrl + "/credentials/" + dbType.Endpoint }
+                            },
+                            claims = claimPaths
+                        }
+                    }
+                };
+            }
+
+            // jwt_vc_json ใช้ type_values
+            return new
+            {
+                credentials = new[]
+                {
+                    new
+                    {
+                        id     = dbType.DocType,
+                        format = format,
+                        meta   = new
+                        {
+                            type_values = new[] { vcTypes.LastOrDefault() }
+                        },
+                        // เพิ่มบรรทัดนี้ — เดิมไม่มี claims เลยใน branch นี้
+                        claims = GetClaimsByDocType(dbType.DocType)
+                    }
+                }
+            };
+        }
+
+        private object[] GetClaimsByDocType(string docType)
+        {
+            return docType?.ToLower() switch
+            {
+                // ✅ IDCard
+                "idcard_credential" => new object[]
+                {
+                    new { path = new[] { "id_number"    } },
+                    new { path = new[] { "full_name"    } },
+                    new { path = new[] { "birthdate"    } },
+                    new { path = new[] { "expiry_date"  } },
+                    new { path = new[] { "religion"     } }
+                   // new { path = new[] { "photo"        } }
+                },
+
+                // ✅ Transcript
+                "transcript_credential" => new object[]
+                {
+                   // new { path = new[] { "student_id"   } },
+                    new { path = new[] { "full_name"    } },
+                    new { path = new[] { "degree"       } },
+                    new { path = new[] { "institution_name" } },
+                    new { path = new[] { "faculty"      } },
+                    new { path = new[] { "gpa"          } },
+                    new { path = new[] { "graduation_date" } }
+                },
+
+                // ✅ Driver License
+                "driverlicense_credential" => new object[]
+                {
+            new { path = new[] { "license_number" } },
+            new { path = new[] { "full_name"      } },
+            new { path = new[] { "birthdate"      } },
+            new { path = new[] { "license_type"   } },
+            new { path = new[] { "expiry_date"    } },
+            new { path = new[] { "photo"          } }
+                },
+
+                // Default — ไม่รู้จัก docType ส่ง empty (ขอทั้งหมด)
+                _ => Array.Empty<object>()
+            };
         }
 
         //public string getProofByNonce(string proof)

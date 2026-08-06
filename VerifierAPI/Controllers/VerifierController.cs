@@ -32,34 +32,78 @@ namespace VerifierAPI.Controllers
             _logger = logger;
         }
 
+        //[Route("/generate-vp-qr")]
+        //[HttpPost]
+        //public IActionResult VerifierPresentVP([FromBody] GenerateVpQrRequest docType)
+        //{
+
+        //    VCService vcServ = new VCService();
+        //    DBService dbServ = new DBService();
+        //    VpRequestSession model = new VpRequestSession();
+
+        //    baseUrl = Environment.GetEnvironmentVariable("INTERNAL_BASE_URL")
+        //      ?? $"{Request.Scheme}://{Request.Host}"; 
+        //    model = dbServ.SaveVerifierSession(docType.DocumentType.ToString());
+        //    string nonce = model.nonce;
+        //    string stateid = model.stateId;
+
+
+        //    string request_uri = $"{baseUrl}/openid4vc/request/{stateid}";
+        //    var vp = "client_id=redirect_uri:" + $"{baseUrl}/openid4vc/verify/{stateid}"
+        //                                       + "&request_uri=" + request_uri;
+
+        //    string authorizationRequestUri = "openid4vp://authorize?" + vp;
+        //    string QRCode = vcServ.GenerateQrCodeBase64("openid4vp://authorize?" + vp);
+
+        //    //DBService serv = new DBService();
+        //    //serv.SaveRequest(AppContextHelper.UserId, stateid, "VP");
+        //    var response = new GenerateVpQrResponse
+        //    {
+        //        AuthorizationRequestUri = authorizationRequestUri,
+        //        QrText = authorizationRequestUri,
+        //        QrImageBase64 = QRCode,
+        //        State = stateid,
+        //        Nonce = nonce
+        //    };
+
+        //    return Ok(response);
+        //}
+
         [Route("/generate-vp-qr")]
         [HttpPost]
         public IActionResult VerifierPresentVP([FromBody] GenerateVpQrRequest docType)
         {
-
             VCService vcServ = new VCService();
             DBService dbServ = new DBService();
             VpRequestSession model = new VpRequestSession();
 
             baseUrl = Environment.GetEnvironmentVariable("INTERNAL_BASE_URL")
-              ?? $"{Request.Scheme}://{Request.Host}"; 
+              ?? $"{Request.Scheme}://{Request.Host}";
             model = dbServ.SaveVerifierSession(docType.DocumentType.ToString());
             string nonce = model.nonce;
             string stateid = model.stateId;
-            
 
             string request_uri = $"{baseUrl}/openid4vc/request/{stateid}";
-            var vp = "client_id=redirect_uri:" + $"{baseUrl}/openid4vc/verify/{stateid}"
-                                               + "&request_uri=" + request_uri;
-                
-            string authorizationRequestUri = "openid4vp://authorize?" + vp;
-            string QRCode = vcServ.GenerateQrCodeBase64("openid4vp://authorize?" + vp);
+            string clientId = $"redirect_uri:{baseUrl}/openid4vc/verify/{stateid}";
 
-            //DBService serv = new DBService();
-            //serv.SaveRequest(AppContextHelper.UserId, stateid, "VP");
+            // สำคัญ: ต้อง URL-encode ค่าที่มี :, /, & ปนอยู่ ไม่งั้น Wallet parse query string ผิด
+            // (ตรงกับตัวอย่างในสเปก client_id=redirect_uri%3Ahttps%3A%2F%2F...)
+            string encodedParams =
+                $"client_id={Uri.EscapeDataString(clientId)}" +
+                $"&request_uri={Uri.EscapeDataString(request_uri)}";
+
+            // ใช้สำหรับ QR (cross device) — Wallet ทั่วไปที่รองรับ openid4vp:// ตามสเปก
+            string authorizationRequestUri = "openid4vp://authorize?" + encodedParams;
+
+            // ใช้สำหรับปุ่ม deeplink (same device) — scheme เฉพาะของแอป Wallet นี้
+            string deeplinkUri = "walletapp://callback?" + encodedParams;
+
+            string QRCode = vcServ.GenerateQrCodeBase64(authorizationRequestUri);
+
             var response = new GenerateVpQrResponse
             {
-                AuthorizationRequestUri = authorizationRequestUri,
+                AuthorizationRequestUri = authorizationRequestUri, // ยังคงไว้เผื่อของเดิมใช้อยู่
+                DeeplinkUri = deeplinkUri,                          // ใหม่ - ใช้กับปุ่ม same-device
                 QrText = authorizationRequestUri,
                 QrImageBase64 = QRCode,
                 State = stateid,
@@ -68,7 +112,6 @@ namespace VerifierAPI.Controllers
 
             return Ok(response);
         }
-
 
         private object BuildDcqlQuery(DocumentType docType)
         {
@@ -149,52 +192,9 @@ namespace VerifierAPI.Controllers
             };
         }
 
-        private object BuildDcqlQuery(Dbdocumenttype docType)
-        {
-            var vcTypes = JsonConvert.DeserializeObject<string[]>(docType.VcType)
-                          ?? throw new InvalidOperationException($"VcType invalid: {docType.VcType}");
+        
 
-            string format = docType.Format?.ToLower();
-            string issuerBaseUrl = Environment.GetEnvironmentVariable("ISSUER_BASE_URL")
-              ?? Environment.GetEnvironmentVariable("INTERNAL_BASE_URL")
-              ?? $"{Request.Scheme}://{Request.Host}";
-            if (format == "dc+sd-jwt")
-            {
-                // SD-JWT ใช้ vct_values — เอา type สุดท้าย เช่น "TranscriptCredential"
-                return new
-                {
-                    credentials = new[]
-                    {
-                        new
-                        {
-                            id     = docType.DocType,
-                            format = format,
-                            meta   = new
-                            {
-                                vct_values = new[] { issuerBaseUrl + "/credentials/" + docType.Endpoint }
-                            }
-                        }
-                    }
-                };
-            }
-
-            // jwt_vc_json ใช้ type_values
-            return new
-            {
-                credentials = new[]
-                {
-                    new
-                    {
-                        id     = docType.DocType,
-                        format = format,
-                        meta   = new
-                        {
-                            type_values = new[] { vcTypes }
-                        }
-                    }
-                }
-            };
-        }
+        
 
         private object BuildPresentationDefinition(Dbdocumenttype docType)
         {
@@ -379,14 +379,6 @@ namespace VerifierAPI.Controllers
             string stateid = id;
             Dbdocumenttype docType =  dbServ.GetRequestDocType(id);
 
-            PresentationOffer presentationOffer = new PresentationOffer();
-            presentationOffer.response_type = "vp_token";
-            presentationOffer.response_mode = "direct_post";
-            presentationOffer.state = stateid;
-            presentationOffer.client_id = $"{baseUrl}/openid4vc/verify/{stateid}";
-            presentationOffer.nonce = nonce;
-            presentationOffer.response_uri = $"{baseUrl}/openid4vc/verify/{stateid}";
-
 
             // Build client_metadata จาก DB
             var algValues = JsonConvert.DeserializeObject<string[]>(docType.AlgValues);
@@ -404,7 +396,7 @@ namespace VerifierAPI.Controllers
                 client_id = $"redirect_uri:{baseUrl}/openid4vc/verify/{stateid}",
                 response_mode = "direct_post",
                 state = stateid,
-                presentation_definition = BuildPresentationDefinition(docType),
+                dcql_query = vcServ.BuildDcqlQuery(docType, Request),
                 client_metadata = clientMetadata,
                 nonce = nonce,
                 response_uri = $"{baseUrl}/openid4vc/verify/{stateid}"
@@ -427,7 +419,7 @@ namespace VerifierAPI.Controllers
             //    client_metadata = clientMetadata,
             //    nonce = presentationOffer.nonce,
             //    response_uri = presentationOffer.response_uri
-            //});     
+            //});
 
 
         }
@@ -690,8 +682,95 @@ namespace VerifierAPI.Controllers
             }
         }
 
+        [HttpGet("/verifier/status/{sessionId}")]
+        public IActionResult GetScanStatus(string sessionId)
+        {
+            if (string.IsNullOrWhiteSpace(sessionId))
+                return BadRequest(new { status = "failed", error = "missing_session_id" });
 
+            var context = new VerifierDbContext();
+            var result = context.Dbverifierresponses
+                .Where(r => r.SessionId == sessionId)
+                .FirstOrDefault();
 
+            // ยังไม่มีแถวเลย = wallet ยังไม่ได้ verify ผ่าน (หรือยังไม่ได้ส่งอะไรกลับมาเลย)
+            // สองกรณีนี้แยกกันไม่ออกจาก DB อย่างเดียว เพราะ VerifierVP ไม่เซฟ row เมื่อ verify ไม่ผ่าน
+            if (result == null || (string.IsNullOrWhiteSpace(result.VpToken) && string.IsNullOrWhiteSpace(result.VcPayload)))
+                return Ok(new { status = "pending" });
+
+            var claims = ParseClaimsFromVcPayload(result.VcPayload);
+            return Ok(new { status = "completed", claims });
+        }
+
+        private static Dictionary<string, object> ParseClaimsFromVcPayload(string? vcPayload)
+        {
+            if (string.IsNullOrWhiteSpace(vcPayload))
+                return new Dictionary<string, object>();
+
+            // ---- กรณี SD-JWT: <Issuer-signed JWT>~<disclosure1>~<disclosure2>~...~[KB-JWT] ----
+            if (vcPayload.Contains('~'))
+            {
+                var claims = new Dictionary<string, object>();
+                var parts = vcPayload.Split('~', StringSplitOptions.RemoveEmptyEntries);
+
+                // parts[0] คือ issuer-signed JWT (header.payload.sig) — ข้าม ไม่ใช่ disclosure
+                for (int i = 1; i < parts.Length; i++)
+                {
+                    try
+                    {
+                        var decoded = Base64UrlDecodeToString(parts[i]);
+                        var arr = JsonConvert.DeserializeObject<JArray>(decoded);
+
+                        // disclosure ของ object property มาตรฐาน = [salt, claimName, claimValue]
+                        if (arr != null && arr.Count == 3)
+                        {
+                            var claimName = arr[1].ToString();
+                            var valueToken = arr[2];
+                            claims[claimName] = valueToken.Type == JTokenType.Object || valueToken.Type == JTokenType.Array
+                                ? valueToken.ToString(Formatting.None)
+                                : valueToken.ToObject<object>();
+                        }
+                        // ถ้า parts[i] ไม่ใช่ disclosure ที่ decode ออกมาเป็น array 3 ตัว มักเป็น
+                        // Key Binding JWT ที่แปะท้ายสุด (มีจุด . คั่น ไม่ใช่ base64url ของ JSON array
+                        // เฉย ๆ) — ข้ามเงียบ ๆ ไม่ถือเป็น error
+                    }
+                    catch
+                    {
+                        // decode/parse ไม่ออก (เช่นเจอ KB-JWT) ข้ามไปตัวถัดไป
+                    }
+                }
+
+                if (claims.Count > 0)
+                    return claims;
+                // ถ้า decode disclosure ไม่ได้เลยสักตัว ให้ตกไป fallback ด้านล่าง
+            }
+
+            // ---- fallback: เผื่อ VcPayload เป็น JSON object claims ตรง ๆ (ไม่ใช่ SD-JWT) ----
+            try
+            {
+                return JsonConvert.DeserializeObject<Dictionary<string, object>>(vcPayload)
+                       ?? new Dictionary<string, object>();
+            }
+            catch
+            {
+                return new Dictionary<string, object>
+                {
+                    ["raw_payload"] = vcPayload
+                };
+            }
+        }
+
+        private static string Base64UrlDecodeToString(string input)
+        {
+            string s = input.Replace('-', '+').Replace('_', '/');
+            switch (s.Length % 4)
+            {
+                case 2: s += "=="; break;
+                case 3: s += "="; break;
+            }
+            var bytes = Convert.FromBase64String(s);
+            return Encoding.UTF8.GetString(bytes);
+        }
         /*public async Task<IActionResult> VerifierVP_old([FromForm] string vp_token,  [FromForm] string state)//[FromForm] string presentation_submission,)
         {
 

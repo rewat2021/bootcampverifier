@@ -10,6 +10,7 @@
 
   <ItemGroup>
     <Compile Remove="Controllers\WeatherForecastController.cs" />
+    <Compile Remove="Service\VerifierRequestService%281%29.cs" />
   </ItemGroup>
 
   <ItemGroup>
@@ -31,6 +32,9 @@
     <PackageReference Include="SimpleBase" Version="5.6.0" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="6.6.2" />
     <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.16.0" />
+   <None Update="document-types.json">
+    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+  </None>
   </ItemGroup>
 
 </Project>

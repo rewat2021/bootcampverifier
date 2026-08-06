@@ -1,0 +1,650 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>จุดตรวจสอบ — OIDC4VP Infrared Scan Terminal</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Sans+Thai:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg-void:#0a0c09;
+    --bg-panel:#14170f;
+    --bg-panel-2:#191c14;
+    --line:#2a2f22;
+    --line-soft:#20241a;
+    --ir-red:#ff2a1f;
+    --ir-red-glow:rgba(255,42,31,0.45);
+    --ir-red-dim:#5c130e;
+    --amber:#f5a623;
+    --green:#34d399;
+    --green-glow:rgba(52,211,153,0.35);
+    --text-hi:#eef1e9;
+    --text-mid:#a9b09e;
+    --text-dim:#6c7263;
+    --font-display:'Space Grotesk', sans-serif;
+    --font-thai:'IBM Plex Sans Thai', sans-serif;
+    --font-mono:'JetBrains Mono', monospace;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  body{
+    background:
+      radial-gradient(ellipse at 20% -10%, #1b2013 0%, transparent 55%),
+      radial-gradient(ellipse at 90% 110%, #1a1108 0%, transparent 50%),
+      var(--bg-void);
+    color:var(--text-hi);
+    font-family:var(--font-thai);
+    min-height:100vh;
+    padding:28px 20px 60px;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1180px; margin:0 auto;}
+
+  /* ---------- top bar ---------- */
+  .topbar{
+    display:flex; align-items:center; justify-content:space-between;
+    padding-bottom:18px; margin-bottom:22px;
+    border-bottom:1px solid var(--line);
+  }
+  .brand{display:flex; align-items:center; gap:12px;}
+  .brand-mark{
+    width:34px; height:34px; border-radius:7px;
+    background:linear-gradient(150deg, var(--ir-red), var(--ir-red-dim));
+    display:flex; align-items:center; justify-content:center;
+    box-shadow:0 0 18px var(--ir-red-glow);
+    flex:none;
+  }
+  .brand-mark svg{width:18px; height:18px;}
+  .brand-text .t1{font-family:var(--font-display); font-weight:700; font-size:15px; letter-spacing:0.02em;}
+  .brand-text .t2{font-family:var(--font-mono); font-size:10.5px; color:var(--text-dim); letter-spacing:0.06em; margin-top:1px;}
+  .device-status{display:flex; align-items:center; gap:22px; font-family:var(--font-mono); font-size:11px; color:var(--text-mid);}
+  .dstat{display:flex; align-items:center; gap:7px;}
+  .dot{width:7px; height:7px; border-radius:50%; background:var(--green); box-shadow:0 0 8px var(--green-glow);}
+  .dot.idle{background:var(--amber); box-shadow:0 0 8px rgba(245,166,35,.4);}
+
+  h1.headline{
+    font-family:var(--font-thai); font-weight:600; font-size:22px; color:var(--text-hi);
+    margin-bottom:4px;
+  }
+  .sub{font-family:var(--font-mono); font-size:11.5px; color:var(--text-dim); margin-bottom:26px; letter-spacing:0.03em;}
+
+  /* ---------- main grid ---------- */
+  .grid{display:grid; grid-template-columns:1fr 1.15fr; gap:22px;}
+  @media (max-width:880px){ .grid{grid-template-columns:1fr;} }
+
+  .panel{
+    background:var(--bg-panel);
+    border:1px solid var(--line);
+    border-radius:14px;
+    overflow:hidden;
+  }
+  .panel-head{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:14px 18px; border-bottom:1px solid var(--line-soft);
+  }
+  .panel-head .label{font-family:var(--font-mono); font-size:10.5px; letter-spacing:0.12em; text-transform:uppercase; color:var(--text-dim);}
+  .badge{
+    font-family:var(--font-mono); font-size:10px; padding:3px 9px; border-radius:100px;
+    border:1px solid var(--line); color:var(--text-mid); letter-spacing:.04em;
+  }
+  .badge.scanning{color:var(--ir-red); border-color:var(--ir-red-dim); background:rgba(255,42,31,.07);}
+  .badge.ok{color:var(--green); border-color:#144a37; background:rgba(52,211,153,.07);}
+  .badge.fail{color:var(--ir-red); border-color:var(--ir-red-dim); background:rgba(255,42,31,.07);}
+
+  /* ---------- SCANNER BED (left) ---------- */
+  .scanner-body{padding:22px; display:flex; flex-direction:column; align-items:center;}
+  .bed{
+    position:relative; width:100%; max-width:340px; aspect-ratio:3/4;
+    background:
+      repeating-linear-gradient(0deg, rgba(255,255,255,0.015) 0 1px, transparent 1px 3px),
+      #0d0f0a;
+    border:1px solid #22261a;
+    border-radius:10px;
+    display:flex; align-items:center; justify-content:center;
+    box-shadow:inset 0 0 40px rgba(0,0,0,0.6);
+    overflow:hidden;
+  }
+  .bed::before{
+    content:''; position:absolute; inset:0;
+    background:linear-gradient(180deg, rgba(0,0,0,0) 0%, rgba(0,0,0,.35) 100%);
+    pointer-events:none;
+  }
+  .phone{
+    width:150px; height:290px; border-radius:22px; background:#181a13;
+    border:2px solid #2c3120; position:relative; z-index:1;
+    display:flex; align-items:center; justify-content:center;
+    box-shadow:0 10px 30px rgba(0,0,0,.5);
+    transition:filter .3s ease;
+  }
+  .phone-notch{position:absolute; top:8px; left:50%; transform:translateX(-50%); width:44px; height:5px; border-radius:4px; background:#0d0f0a;}
+  .qr{
+    width:104px; height:104px; border-radius:6px; background:#eef1e9;
+    display:grid; grid-template-columns:repeat(7,1fr); grid-template-rows:repeat(7,1fr); padding:8px; gap:2px;
+  }
+  .qr i{background:#0d0f0a; border-radius:1px;}
+  .qr i.off{background:transparent;}
+
+  .laser{
+    position:absolute; left:6%; right:6%; height:2px;
+    background:linear-gradient(90deg, transparent, var(--ir-red) 15%, #ffb3ad 50%, var(--ir-red) 85%, transparent);
+    box-shadow:0 0 12px 2px var(--ir-red-glow), 0 0 30px 6px rgba(255,42,31,.25);
+    top:50%; opacity:0; z-index:2;
+  }
+  .laser.on{opacity:1; animation:sweep 1.3s ease-in-out infinite;}
+  @keyframes sweep{
+    0%{top:14%;} 50%{top:86%;} 100%{top:14%;}
+  }
+  .ir-wash{position:absolute; inset:0; background:radial-gradient(ellipse at 50% 50%, rgba(255,42,31,.10), transparent 65%); opacity:0; z-index:1; transition:opacity .3s;}
+  .ir-wash.on{opacity:1;}
+
+  .led-row{position:absolute; top:10px; right:12px; display:flex; gap:6px; z-index:3;}
+  .led{width:6px; height:6px; border-radius:50%; background:#2a2f22;}
+  .led.amber-on{background:var(--amber); box-shadow:0 0 7px rgba(245,166,35,.7); animation:blink 1s steps(1) infinite;}
+  .led.red-on{background:var(--ir-red); box-shadow:0 0 7px var(--ir-red-glow);}
+  .led.green-on{background:var(--green); box-shadow:0 0 7px var(--green-glow);}
+  @keyframes blink{50%{opacity:.25;}}
+
+  .bed-caption{font-family:var(--font-mono); font-size:10.5px; color:var(--text-dim); margin-top:14px; text-align:center; letter-spacing:.03em; min-height:16px;}
+  .bed-caption b{color:var(--text-mid); font-weight:500;}
+
+  .scan-btn-row{display:flex; gap:10px; margin-top:18px; width:100%; max-width:340px;}
+  button{
+    font-family:var(--font-thai); font-weight:500; font-size:13px; cursor:pointer;
+    border-radius:8px; padding:11px 16px; border:1px solid var(--line);
+    background:var(--bg-panel-2); color:var(--text-hi); transition:all .15s ease;
+    flex:1;
+  }
+  button:hover{border-color:#3a4029; background:#1c2016;}
+  button.primary{background:var(--ir-red); border-color:var(--ir-red); color:#1a0503; font-weight:600;}
+  button.primary:hover{background:#ff453b; box-shadow:0 0 20px var(--ir-red-glow);}
+  button:disabled{opacity:.35; cursor:not-allowed;}
+  button.ghost{background:transparent;}
+  .fail-toggle{
+    display:flex; align-items:center; gap:8px; margin-top:14px;
+    font-family:var(--font-mono); font-size:10.5px; color:var(--text-dim); cursor:pointer; user-select:none;
+  }
+  .fail-toggle input{accent-color:var(--ir-red);}
+
+  /* ---------- CONSOLE (right) ---------- */
+  .console-body{padding:18px;}
+  .step{
+    display:flex; align-items:flex-start; gap:12px;
+    padding:11px 6px; border-bottom:1px solid var(--line-soft);
+    opacity:.3; transition:opacity .35s ease;
+  }
+  .step:last-child{border-bottom:none;}
+  .step.active,.step.done{opacity:1;}
+  .step-icon{
+    width:20px; height:20px; border-radius:50%; flex:none; margin-top:1px;
+    border:1.5px solid var(--line); display:flex; align-items:center; justify-content:center;
+    font-family:var(--font-mono); font-size:10px; color:var(--text-dim);
+    transition:all .25s ease;
+  }
+  .step.active .step-icon{border-color:var(--ir-red); color:var(--ir-red); animation:pulse-ring 1s ease-in-out infinite;}
+  .step.done .step-icon{border-color:var(--green); background:var(--green); color:#06251a;}
+  .step.failed .step-icon{border-color:var(--ir-red); background:var(--ir-red); color:#2a0805;}
+  @keyframes pulse-ring{0%,100%{box-shadow:0 0 0 0 rgba(255,42,31,.4);} 50%{box-shadow:0 0 0 4px rgba(255,42,31,0);}}
+  .step-text .st-title{font-size:13px; color:var(--text-hi); font-weight:500;}
+  .step-text .st-sub{font-family:var(--font-mono); font-size:10.5px; color:var(--text-dim); margin-top:2px;}
+
+  .log{
+    margin-top:14px; background:#0d0f0a; border:1px solid var(--line-soft); border-radius:8px;
+    padding:12px 14px; font-family:var(--font-mono); font-size:10.5px; line-height:1.7;
+    color:var(--text-mid); max-height:190px; overflow-y:auto;
+  }
+  .log .k{color:#7fa88c;}
+  .log .v{color:var(--text-hi);}
+  .log .comment{color:var(--text-dim);}
+  .log::-webkit-scrollbar{width:6px;}
+  .log::-webkit-scrollbar-thumb{background:var(--line); border-radius:4px;}
+
+  /* result card */
+  .result{margin-top:16px; border-radius:10px; border:1px solid var(--line); overflow:hidden; display:none;}
+  .result.show{display:block;}
+  .result-head{padding:14px 16px; display:flex; align-items:center; gap:10px;}
+  .result-head.ok{background:rgba(52,211,153,.08); border-bottom:1px solid #144a37;}
+  .result-head.fail{background:rgba(255,42,31,.08); border-bottom:1px solid var(--ir-red-dim);}
+  .result-head .ricon{width:26px; height:26px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:14px; flex:none;}
+  .result-head.ok .ricon{background:var(--green); color:#06251a;}
+  .result-head.fail .ricon{background:var(--ir-red); color:#2a0805;}
+  .result-head .rtitle{font-family:var(--font-thai); font-weight:600; font-size:14.5px;}
+  .result-head.ok .rtitle{color:var(--green);}
+  .result-head.fail .rtitle{color:var(--ir-red);}
+  .result-head .rsub{font-family:var(--font-mono); font-size:10px; color:var(--text-dim); margin-top:2px;}
+  .claims{padding:14px 16px;}
+  .claim-row{display:flex; justify-content:space-between; padding:7px 0; border-bottom:1px dashed var(--line-soft); font-size:12.5px;}
+  .claim-row:last-child{border-bottom:none;}
+  .claim-row .ck{color:var(--text-dim); font-family:var(--font-mono); font-size:10.5px;}
+  .claim-row .cv{color:var(--text-hi); font-weight:500;}
+
+  .footnote{
+    margin-top:22px; font-family:var(--font-mono); font-size:10px; color:var(--text-dim);
+    line-height:1.7; border-top:1px solid var(--line); padding-top:16px;
+  }
+
+  /* ---------- document type request selector ---------- */
+  .doctype-panel{margin-bottom:22px;}
+  .doctype-body{padding:16px 18px 18px;}
+  .doctype-hint{font-family:var(--font-mono); font-size:10.5px; color:var(--text-dim); margin-bottom:13px; line-height:1.6;}
+  .doctype-grid{display:grid; grid-template-columns:repeat(auto-fill, minmax(210px,1fr)); gap:10px;}
+  .doctype-chip{
+    position:relative; display:flex; gap:10px; align-items:flex-start;
+    padding:11px 12px; border-radius:9px; border:1px solid var(--line);
+    background:var(--bg-panel-2); cursor:pointer; transition:all .15s ease;
+  }
+  .doctype-chip:hover{border-color:#3a4029;}
+  .doctype-chip input{position:absolute; opacity:0; width:0; height:0;}
+  .doctype-chip .box{
+    width:16px; height:16px; border-radius:4px; border:1.5px solid var(--line);
+    flex:none; margin-top:1px; display:flex; align-items:center; justify-content:center;
+    font-size:10px; color:transparent; transition:all .15s ease;
+  }
+  .doctype-chip.selected{border-color:var(--ir-red-dim); background:rgba(255,42,31,.06);}
+  .doctype-chip.selected .box{background:var(--ir-red); border-color:var(--ir-red); color:#1a0503;}
+  .doctype-chip .dc-label{font-size:12.5px; font-weight:500; color:var(--text-hi);}
+  .doctype-chip .dc-format{font-family:var(--font-mono); font-size:9.5px; color:var(--text-dim); margin-top:3px; letter-spacing:.03em;}
+  .doctype-empty-warn{
+    font-family:var(--font-mono); font-size:10.5px; color:var(--ir-red); margin-top:12px; display:none;
+  }
+  .doctype-empty-warn.show{display:block;}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="topbar">
+    <div class="brand">
+      <div class="brand-mark">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#1a0503" stroke-width="2.4" stroke-linecap="round"><path d="M4 8V5a1 1 0 0 1 1-1h3M20 8V5a1 1 0 0 0-1-1h-3M4 16v3a1 1 0 0 0 1 1h3M20 16v3a1 1 0 0 1-1 1h-3M8 12h8"/></svg>
+      </div>
+      <div class="brand-text">
+        <div class="t1">IR-SCAN VERIFIER</div>
+        <div class="t2">TERMINAL#04 · GATE-B</div>
+      </div>
+    </div>
+    <div class="device-status">
+      <div class="dstat"><span class="dot idle" id="netDot"></span>NETWORK OK</div>
+      <div class="dstat"><span class="dot" id="scannerDot"></span>SCANNER READY</div>
+    </div>
+  </div>
+
+  <h1 class="headline">จำลองการตรวจสอบ: Verifier สแกน QR ของ Holder ด้วยเครื่องอ่านอินฟราเรด</h1>
+  <div class="sub">OpenID for Verifiable Presentations · cross-device flow · vp_token verification</div>
+
+  <div class="panel doctype-panel">
+    <div class="panel-head">
+      <span class="label">Requested Credential Types</span>
+      <span class="badge" id="doctypeBadge">0 เลือก</span>
+    </div>
+    <div class="doctype-body">
+      <div class="doctype-hint">เลือกประเภทเอกสารที่ verifier ต้องการให้ holder แสดง — ระบบจะสร้าง presentation_definition / dcql_query จากรายการที่เลือก และแสดงเฉพาะ claims ที่เกี่ยวข้องหลังตรวจสอบผ่าน</div>
+      <div class="doctype-grid" id="doctypeGrid"></div>
+      <div class="doctype-empty-warn" id="doctypeWarn">โปรดเลือกประเภทเอกสารอย่างน้อย 1 รายการ ก่อนเริ่มสแกน</div>
+    </div>
+  </div>
+
+  <div class="grid">
+
+    <!-- LEFT: physical scanner -->
+    <div class="panel">
+      <div class="panel-head">
+        <span class="label">Scanner Bed</span>
+        <span class="badge" id="scanBadge">รอการสแกน</span>
+      </div>
+      <div class="scanner-body">
+        <div class="bed" id="bed">
+          <div class="led-row">
+            <span class="led" id="ledAmber"></span>
+            <span class="led" id="ledRed"></span>
+            <span class="led" id="ledGreen"></span>
+          </div>
+          <div class="ir-wash" id="irWash"></div>
+          <div class="phone" id="phone">
+            <div class="phone-notch"></div>
+            <div class="qr" id="qrGrid"></div>
+          </div>
+          <div class="laser" id="laser"></div>
+        </div>
+        <div class="bed-caption" id="bedCaption">วาง QR code จากแอปกระเป๋าของ Holder ให้อยู่กึ่งกลางลำแสงอินฟราเรด</div>
+
+        <div class="scan-btn-row">
+          <button class="primary" id="scanBtn" onclick="startScan()">เริ่มสแกน QR</button>
+          <button class="ghost" id="resetBtn" onclick="resetAll()" disabled>รีเซ็ต</button>
+        </div>
+        <label class="fail-toggle">
+          <input type="checkbox" id="forceFail"> จำลองกรณีตรวจสอบไม่ผ่าน (invalid signature)
+        </label>
+      </div>
+    </div>
+
+    <!-- RIGHT: verification console -->
+    <div class="panel">
+      <div class="panel-head">
+        <span class="label">Verification Console</span>
+        <span class="badge" id="consoleBadge">IDLE</span>
+      </div>
+      <div class="console-body">
+
+        <div class="step" id="step1">
+          <div class="step-icon">1</div>
+          <div class="step-text">
+            <div class="st-title">อ่านสัญญาณอินฟราเรดและถอดรหัส QR</div>
+            <div class="st-sub">decode payload → openid4vp:// authorization request URI</div>
+          </div>
+        </div>
+        <div class="step" id="step2">
+          <div class="step-icon">2</div>
+          <div class="step-text">
+            <div class="st-title">ตรวจสอบ vp_token และรูปแบบ credential</div>
+            <div class="st-sub">parse vp_token → format: dc+sd-jwt / mso_mdoc</div>
+          </div>
+        </div>
+        <div class="step" id="step3">
+          <div class="step-icon">3</div>
+          <div class="step-text">
+            <div class="st-title">ตรวจลายเซ็นและการผูก holder (holder binding)</div>
+            <div class="st-sub">verify issuer signature + key binding JWT (KB-JWT)</div>
+          </div>
+        </div>
+        <div class="step" id="step4">
+          <div class="step-icon">4</div>
+          <div class="step-text">
+            <div class="st-title">ตรวจสอบตรงกับ presentation definition</div>
+            <div class="st-sub">match disclosed claims against requested constraints</div>
+          </div>
+        </div>
+
+        <div class="log" id="logBox">
+          <div class="comment">// รอเริ่มการสแกน...</div>
+        </div>
+
+        <div class="result" id="result">
+          <div class="result-head" id="resultHead">
+            <div class="ricon" id="resultIcon">✓</div>
+            <div>
+              <div class="rtitle" id="resultTitle">ตรวจสอบผ่าน</div>
+              <div class="rsub" id="resultSub">verified at --:--:--</div>
+            </div>
+          </div>
+          <div class="claims" id="claimsBox"></div>
+        </div>
+
+      </div>
+    </div>
+
+  </div>
+
+  <div class="footnote">
+    หน้าจำลองนี้ใช้แสดงลำดับขั้นตอนของฝั่ง Verifier เมื่อสแกน QR code ที่ Holder แสดงบนอุปกรณ์ ผ่านเครื่องอ่านบาร์โค้ด/QR แบบเลเซอร์อินฟราเรด แล้วจึงตรวจสอบ Verifiable Presentation ตามสเปก OpenID4VP (parse → verify signature → validate holder binding → match presentation definition) ข้อมูล credential ที่แสดงเป็นข้อมูลตัวอย่างทั้งหมด ไม่ใช่ข้อมูลจริง
+  </div>
+
+</div>
+
+<script>
+  // build a pseudo-random QR pattern
+  const qrGrid = document.getElementById('qrGrid');
+  const pattern = [1,1,1,0,1,1,1, 1,0,1,0,1,0,1, 1,1,0,1,0,1,1, 0,0,1,1,1,0,0, 1,1,0,0,0,1,1, 1,0,1,1,1,0,1, 1,1,1,0,1,1,1];
+  pattern.forEach(v=>{
+    const cell = document.createElement('i');
+    if(!v) cell.classList.add('off');
+    qrGrid.appendChild(cell);
+  });
+
+  // ---------- requested credential types ----------
+  const docTypes = [
+    {
+      id:'national_id', label:'บัตรประชาชนดิจิทัล', format:'mso_mdoc',
+      pd:'national-id-pd', doctype:'org.iso.18013.5.1.mDL.nationalID',
+      claims:[
+        {k:'full_name', v:'SIRIPORN THONGDEE'},
+        {k:'citizen_id', v:'1-XXXX-XXXXX-XX-X'},
+        {k:'date_of_birth', v:'1998-04-12'}
+      ]
+    },
+    {
+      id:'mdl', label:'ใบขับขี่ดิจิทัล (mDL)', format:'mso_mdoc',
+      pd:'mdl-pd', doctype:'org.iso.18013.5.1.mDL',
+      claims:[
+        {k:'license_no', v:'62-XXXXXXX'},
+        {k:'vehicle_class', v:'B'},
+        {k:'expiry_date', v:'2029-11-30'}
+      ]
+    },
+    {
+      id:'age_over_18', label:'ยืนยันอายุเกิน 18 ปี', format:'dc+sd-jwt',
+      pd:'age-verification-pd', doctype:'AgeVerificationCredential',
+      claims:[
+        {k:'age_over_18', v:'true'},
+        {k:'issuer', v:'did:web:dopa.go.th'}
+      ]
+    },
+    {
+      id:'event_ticket', label:'ตั๋วเข้างานอีเวนต์', format:'dc+sd-jwt',
+      pd:'event-ticket-pd', doctype:'EventTicketCredential',
+      claims:[
+        {k:'given_name', v:'SIRIPORN'},
+        {k:'family_name', v:'THONGDEE'},
+        {k:'seat', v:'ZONE-A / A12'}
+      ]
+    },
+    {
+      id:'diploma', label:'วุฒิการศึกษา', format:'dc+sd-jwt',
+      pd:'diploma-pd', doctype:'EducationCredential',
+      claims:[
+        {k:'degree', v:'B.Eng Computer Engineering'},
+        {k:'institution', v:'Chulalongkorn University'},
+        {k:'graduation_year', v:'2021'}
+      ]
+    }
+  ];
+
+  const selectedDocTypes = new Set(['age_over_18','event_ticket']); // sensible default
+  const doctypeGrid = document.getElementById('doctypeGrid');
+  const doctypeBadge = document.getElementById('doctypeBadge');
+  const doctypeWarn = document.getElementById('doctypeWarn');
+
+  function renderDocTypes(){
+    doctypeGrid.innerHTML = '';
+    docTypes.forEach(dt=>{
+      const label = document.createElement('label');
+      label.className = 'doctype-chip' + (selectedDocTypes.has(dt.id) ? ' selected':'');
+      label.innerHTML = `
+        <input type="checkbox" data-id="${dt.id}" ${selectedDocTypes.has(dt.id) ? 'checked':''}>
+        <span class="box">✓</span>
+        <span>
+          <div class="dc-label">${dt.label}</div>
+          <div class="dc-format">${dt.format} · ${dt.doctype}</div>
+        </span>
+      `;
+      const input = label.querySelector('input');
+      input.addEventListener('change', ()=>{
+        if(input.checked) selectedDocTypes.add(dt.id);
+        else selectedDocTypes.delete(dt.id);
+        label.classList.toggle('selected', input.checked);
+        updateDocTypeBadge();
+        if(!running) syncScanBtn();
+      });
+      doctypeGrid.appendChild(label);
+    });
+    updateDocTypeBadge();
+  }
+  function updateDocTypeBadge(){
+    doctypeBadge.textContent = selectedDocTypes.size + ' เลือก';
+    doctypeBadge.className = 'badge' + (selectedDocTypes.size ? ' ok' : ' fail');
+  }
+  function syncScanBtn(){
+    const none = selectedDocTypes.size === 0;
+    scanBtn.disabled = none;
+    doctypeWarn.classList.toggle('show', none);
+  }
+
+  const scanBtn = document.getElementById('scanBtn');
+  const resetBtn = document.getElementById('resetBtn');
+  const laser = document.getElementById('laser');
+  const irWash = document.getElementById('irWash');
+  const scanBadge = document.getElementById('scanBadge');
+  const consoleBadge = document.getElementById('consoleBadge');
+  const bedCaption = document.getElementById('bedCaption');
+  const ledAmber = document.getElementById('ledAmber');
+  const ledRed = document.getElementById('ledRed');
+  const ledGreen = document.getElementById('ledGreen');
+  const scannerDot = document.getElementById('scannerDot');
+  const logBox = document.getElementById('logBox');
+  const result = document.getElementById('result');
+  const resultHead = document.getElementById('resultHead');
+  const resultIcon = document.getElementById('resultIcon');
+  const resultTitle = document.getElementById('resultTitle');
+  const resultSub = document.getElementById('resultSub');
+  const claimsBox = document.getElementById('claimsBox');
+
+  let running = false;
+  renderDocTypes();
+  syncScanBtn();
+
+  function log(html){
+    const line = document.createElement('div');
+    line.innerHTML = html;
+    logBox.appendChild(line);
+    logBox.scrollTop = logBox.scrollHeight;
+  }
+  function clearLog(){ logBox.innerHTML = ''; }
+
+  function setStep(n, state){
+    const el = document.getElementById('step'+n);
+    el.classList.remove('active','done','failed');
+    if(state) el.classList.add(state);
+    const icon = el.querySelector('.step-icon');
+    if(state==='done') icon.textContent = '✓';
+    else if(state==='failed') icon.textContent = '×';
+    else icon.textContent = n;
+  }
+
+  function resetAll(){
+    running = false;
+    laser.classList.remove('on');
+    irWash.classList.remove('on');
+    ledAmber.className='led'; ledRed.className='led'; ledGreen.className='led';
+    scanBadge.textContent='รอการสแกน'; scanBadge.className='badge';
+    consoleBadge.textContent='IDLE'; consoleBadge.className='badge';
+    bedCaption.innerHTML='วาง QR code จากแอปกระเป๋าของ Holder ให้อยู่กึ่งกลางลำแสงอินฟราเรด';
+    [1,2,3,4].forEach(n=>setStep(n,null));
+    clearLog();
+    log('<span class="comment">// รอเริ่มการสแกน...</span>');
+    result.classList.remove('show');
+    syncScanBtn();
+    resetBtn.disabled = true;
+  }
+
+  function wait(ms){ return new Promise(r=>setTimeout(r,ms)); }
+
+  async function startScan(){
+    if(running || selectedDocTypes.size === 0) return;
+    running = true;
+    scanBtn.disabled = true;
+    resetBtn.disabled = true;
+    clearLog();
+    result.classList.remove('show');
+    [1,2,3,4].forEach(n=>setStep(n,null));
+
+    const shouldFail = document.getElementById('forceFail').checked;
+
+    // phase: scanning
+    scanBadge.textContent='กำลังสแกน'; scanBadge.className='badge scanning';
+    consoleBadge.textContent='SCANNING'; consoleBadge.className='badge scanning';
+    bedCaption.innerHTML='กำลังอ่านด้วยลำแสงอินฟราเรด...';
+    ledRed.className='led red-on';
+    laser.classList.add('on');
+    irWash.classList.add('on');
+    scannerDot.className='dot';
+    await wait(1600);
+
+    const requested = docTypes.filter(dt => selectedDocTypes.has(dt.id));
+    const pdList = requested.map(dt => dt.pd).join(', ');
+    const formatList = [...new Set(requested.map(dt => dt.format))].join(', ');
+
+    setStep(1,'active');
+    log('<span class="k">ir.scan</span> → detected optical pattern, decoding...');
+    await wait(500);
+    log('<span class="k">qr.decode</span> → <span class="v">openid4vp://?client_id=verifier.example.co.th&amp;presentation_definition=' + pdList + '</span>');
+    await wait(500);
+    setStep(1,'done');
+
+    setStep(2,'active');
+    requested.forEach(dt=>{
+      log('<span class="k">vp_token</span> → <span class="v">' + dt.doctype + '</span> <span class="comment">// format=' + dt.format + '</span>');
+    });
+    await wait(700);
+    setStep(2,'done');
+
+    setStep(3,'active');
+    consoleBadge.textContent='VERIFYING'; consoleBadge.className='badge scanning';
+    await wait(700);
+    if(shouldFail){
+      log('<span class="k">sig.verify</span> → <span class="v" style="color:#ff2a1f">FAILED — signature does not match issuer key</span>');
+      setStep(3,'failed');
+      setStep(4,'failed');
+      laser.classList.remove('on');
+      irWash.classList.remove('on');
+      ledRed.className='led red-on';
+      ledGreen.className='led';
+      scanBadge.textContent='ไม่ผ่าน'; scanBadge.className='badge fail';
+      consoleBadge.textContent='REJECTED'; consoleBadge.className='badge fail';
+      bedCaption.innerHTML='<span style="color:#ff2a1f">ตรวจสอบไม่ผ่าน — โปรดให้ Holder แสดง QR ใหม่</span>';
+
+      resultHead.className='result-head fail';
+      resultIcon.textContent='×';
+      resultTitle.textContent='ตรวจสอบไม่ผ่าน';
+      resultSub.textContent='rejected · reason: invalid_signature';
+      claimsBox.innerHTML = `
+        <div class="claim-row"><span class="ck">error</span><span class="cv" style="color:#ff2a1f">invalid_signature</span></div>
+        <div class="claim-row"><span class="ck">requested</span><span class="cv">${requested.map(d=>d.label).join(', ')}</span></div>
+        <div class="claim-row"><span class="ck">client_id</span><span class="cv">verifier.example.co.th</span></div>
+        <div class="claim-row"><span class="ck">nonce</span><span class="cv">a8f0-92cd-…</span></div>
+        <div class="claim-row"><span class="ck">action</span><span class="cv">ปฏิเสธการเข้าใช้งาน / แจ้งเตือนเจ้าหน้าที่</span></div>
+      `;
+      result.classList.add('show');
+      running = false;
+      resetBtn.disabled = false;
+      return;
+    }
+
+    log('<span class="k">sig.verify</span> → <span class="v" style="color:#34d399">OK — issuer key ES256 valid</span>');
+    log('<span class="k">holder_binding</span> → <span class="v" style="color:#34d399">OK — KB-JWT matches presentation</span>');
+    await wait(600);
+    setStep(3,'done');
+
+    setStep(4,'active');
+    await wait(700);
+    log('<span class="k">presentation_definition</span> → <span class="v" style="color:#34d399">all constraints satisfied (' + pdList + ')</span>');
+    setStep(4,'done');
+    await wait(400);
+
+    laser.classList.remove('on');
+    irWash.classList.remove('on');
+    ledRed.className='led';
+    ledGreen.className='led green-on';
+    scanBadge.textContent='ผ่านการตรวจสอบ'; scanBadge.className='badge ok';
+    consoleBadge.textContent='VERIFIED'; consoleBadge.className='badge ok';
+    bedCaption.innerHTML='<span style="color:#34d399">ตรวจสอบผ่าน — อนุญาตให้เข้าใช้งาน</span>';
+
+    const now = new Date().toLocaleTimeString('th-TH');
+    resultHead.className='result-head ok';
+    resultIcon.textContent='✓';
+    resultTitle.textContent='ตรวจสอบผ่าน';
+    resultSub.textContent='verified at '+now+' · '+requested.length+' credential(s)';
+
+    let rows = '';
+    requested.forEach(dt=>{
+      rows += `<div class="claim-row" style="border-bottom:1px solid var(--line-soft); padding-top:12px;"><span class="ck" style="color:var(--text-mid); font-weight:500;">${dt.label}</span><span class="cv" style="font-family:var(--font-mono); font-size:9.5px; color:var(--text-dim); font-weight:400;">${dt.doctype}</span></div>`;
+      dt.claims.forEach(c=>{
+        rows += `<div class="claim-row"><span class="ck">${c.k}</span><span class="cv">${c.v}</span></div>`;
+      });
+    });
+    claimsBox.innerHTML = rows;
+    result.classList.add('show');
+    running = false;
+    resetBtn.disabled = false;
+  }
+</script>
+</body>
+</html>

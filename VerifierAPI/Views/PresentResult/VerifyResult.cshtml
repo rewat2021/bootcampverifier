@@ -1,0 +1,658 @@
+﻿<!doctype html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TechCorp Thailand — ยืนยันตัวตน</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@400;500;600;700;800&family=Sarabun:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-navy-deep: #0b1330;
+            --bg-navy: #101a3f;
+            --bg-navy-panel: #131e49;
+            --bg-navy-row: #16214f;
+            --line-soft: rgba(255,255,255,0.08);
+            --line-softer: rgba(255,255,255,0.05);
+            --text-primary: #f4f6fb;
+            --text-muted: #8a93bd;
+            --text-faint: #626c99;
+            --accent-purple: #6c5ce7;
+            --accent-purple2: #4a3fd6;
+            --accent-blue: #4f7cff;
+            --accent-amber: #f5a524;
+            --accent-green: #2ecc71;
+            --white: #ffffff;
+            --radius-lg: 20px;
+            --radius-md: 14px;
+            --radius-sm: 10px;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html, body {
+            background: var(--bg-navy-deep);
+            font-family: "Noto Sans Thai", "Sarabun", system-ui, sans-serif;
+            color: var(--text-primary);
+            -webkit-font-smoothing: antialiased;
+        }
+
+        main.page {
+            display: flex;
+            justify-content: center;
+            padding: 32px 16px 56px;
+        }
+
+        .card-shell {
+            width: 100%;
+            max-width: 480px;
+            background: var(--bg-navy);
+            border: 1px solid var(--line-soft);
+            border-radius: var(--radius-lg);
+            overflow: hidden;
+            box-shadow: 0 30px 60px -20px rgba(0,0,0,0.55);
+        }
+
+        /* ---------- Header ---------- */
+        .brand-header {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            padding: 20px 22px;
+            border-bottom: 1px solid var(--line-soft);
+        }
+
+        .brand-mark {
+            width: 44px;
+            height: 44px;
+            border-radius: 12px;
+            background: linear-gradient(135deg, var(--accent-purple) 0%, var(--accent-purple2) 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            box-shadow: 0 6px 16px -4px rgba(108,92,231,0.55);
+        }
+
+            .brand-mark svg {
+                width: 22px;
+                height: 22px;
+            }
+
+        .brand-text {
+            flex: 1;
+            min-width: 0;
+        }
+
+            .brand-text .name {
+                font-size: 17px;
+                font-weight: 700;
+                line-height: 1.25;
+            }
+
+            .brand-text .sub {
+                font-size: 12.5px;
+                color: var(--text-muted);
+                margin-top: 1px;
+            }
+
+        .badge {
+            flex-shrink: 0;
+            font-size: 11.5px;
+            font-weight: 600;
+            color: #c9d3ff;
+            background: rgba(79,124,255,0.14);
+            border: 1px solid rgba(79,124,255,0.35);
+            padding: 6px 12px;
+            border-radius: 999px;
+            white-space: nowrap;
+        }
+
+        /* ---------- Intro ---------- */
+        .intro {
+            padding: 22px 22px 18px;
+        }
+
+            .intro h1 {
+                font-size: 22px;
+                font-weight: 700;
+                margin-bottom: 8px;
+            }
+
+            .intro p {
+                font-size: 13.5px;
+                line-height: 1.6;
+                color: var(--text-muted);
+            }
+
+        /* ---------- Data request list ---------- */
+        .data-list {
+            margin: 0 22px 22px;
+            background: var(--bg-navy-panel);
+            border: 1px solid var(--line-soft);
+            border-radius: var(--radius-md);
+            overflow: hidden;
+        }
+
+            .data-list .list-title {
+                display: flex;
+                align-items: center;
+                gap: 12px;
+                padding: 15px 16px;
+                font-size: 14.5px;
+                font-weight: 600;
+                background: rgba(79,124,255,0.08);
+                border-bottom: 1px solid var(--line-softer);
+            }
+
+        .data-row {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 14px 16px;
+            border-bottom: 1px solid var(--line-softer);
+        }
+
+            .data-row:last-child {
+                border-bottom: none;
+            }
+
+        .row-icon {
+            width: 34px;
+            height: 34px;
+            border-radius: 9px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            font-size: 16px;
+        }
+
+        .icon-doc {
+            background: rgba(79,124,255,0.16);
+        }
+
+        .icon-id {
+            background: rgba(108,92,231,0.18);
+        }
+
+        .icon-user {
+            background: rgba(79,124,255,0.16);
+        }
+
+        .icon-degree {
+            background: rgba(245,165,36,0.16);
+        }
+
+        .icon-major {
+            background: rgba(79,124,255,0.16);
+        }
+
+        .icon-gpa {
+            background: rgba(46,204,113,0.16);
+        }
+
+        .icon-graduated {
+            background: rgba(108,92,231,0.18);
+        }
+
+        .row-text {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            min-width: 0;
+        }
+
+            .row-text .label {
+                font-size: 14px;
+                font-weight: 600;
+            }
+
+            .row-text .field {
+                font-size: 12px;
+                color: var(--text-faint);
+                font-family: "SFMono-Regular", Consolas, monospace;
+            }
+
+        /* ---------- QR / Deeplink panel (shared shell, only one child view visible) ---------- */
+        .qr-panel {
+            margin: 0 22px 22px;
+            background: var(--white);
+            color: #10162e;
+            border-radius: var(--radius-lg);
+            padding: 26px 22px 24px;
+            text-align: center;
+        }
+
+            .qr-panel .qr-caption {
+                font-size: 14px;
+                font-weight: 600;
+                color: #1a2140;
+                margin-bottom: 18px;
+                line-height: 1.5;
+            }
+
+        /* ต่างจากเดิม: ทั้ง qr-view และ deeplink-view ซ่อนไว้ก่อนด้วย display:none
+                   แล้วให้ JS เป็นคนเปิดแค่อันเดียวตามอุปกรณ์ ณ ตอนโหลดหน้าจริง */
+        #qrView, #deeplinkView {
+            display: none;
+        }
+
+        .qr-frame {
+            width: 190px;
+            height: 190px;
+            margin: 0 auto 18px;
+            border: 1px solid #e7e9f2;
+            border-radius: 12px;
+            padding: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            overflow: hidden;
+        }
+
+            .qr-frame img {
+                width: 100%;
+                height: 100%;
+                object-fit: contain;
+                display: none; /* shown once loaded */
+            }
+
+            .qr-frame.is-loaded img {
+                display: block;
+            }
+
+            .qr-frame.is-loaded .qr-skeleton {
+                display: none;
+            }
+
+        .qr-skeleton {
+            width: 100%;
+            height: 100%;
+            border-radius: 8px;
+            background: linear-gradient(90deg, #eef0f6 25%, #f8f9fc 37%, #eef0f6 63%);
+            background-size: 400% 100%;
+            animation: shimmer 1.4s ease infinite;
+        }
+
+        @@keyframes shimmer {
+            0% {
+                background-position: 100% 50%;
+            }
+
+            100% {
+                background-position: 0 50%;
+            }
+        }
+
+        .scan-line {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 7px;
+            font-size: 14px;
+            font-weight: 700;
+            color: #1a2140;
+            margin-bottom: 6px;
+        }
+
+            .scan-line svg {
+                width: 16px;
+                height: 16px;
+                flex-shrink: 0;
+            }
+
+        .qr-panel .helper {
+            font-size: 12.5px;
+            color: #6b7290;
+            margin-bottom: 16px;
+        }
+
+        /* ---------- Deeplink button (same device) ---------- */
+        .deeplink-icon {
+            width: 56px;
+            height: 56px;
+            margin: 0 auto 16px;
+            border-radius: 16px;
+            background: linear-gradient(135deg, var(--accent-purple) 0%, var(--accent-purple2) 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+            .deeplink-icon svg {
+                width: 26px;
+                height: 26px;
+            }
+
+        .open-wallet-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            width: 100%;
+            padding: 14px 20px;
+            background: linear-gradient(135deg, var(--accent-purple) 0%, var(--accent-purple2) 100%);
+            color: #fff;
+            font-family: inherit;
+            font-size: 15px;
+            font-weight: 700;
+            text-decoration: none;
+            border: none;
+            border-radius: var(--radius-md);
+            cursor: pointer;
+            margin-bottom: 16px;
+            box-shadow: 0 10px 24px -8px rgba(108,92,231,0.55);
+        }
+
+        .status-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 12.5px;
+            font-weight: 600;
+            color: #b6790a;
+            background: #fff6e6;
+            border: 1px solid #ffe4ad;
+            padding: 7px 14px;
+            border-radius: 999px;
+        }
+
+            .status-pill.is-error {
+                color: #c0392b;
+                background: #fdecea;
+                border-color: #f7c9c3;
+            }
+
+        .status-dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: var(--accent-amber);
+            animation: pulse 1.4s ease-in-out infinite;
+            flex-shrink: 0;
+        }
+
+        .status-pill.is-error .status-dot {
+            background: #c0392b;
+            animation: none;
+        }
+
+        @@keyframes pulse {
+            0%, 100% {
+                opacity: 1;
+                transform: scale(1);
+            }
+
+            50% {
+                opacity: 0.35;
+                transform: scale(0.72);
+            }
+        }
+
+        /* ---------- Footer note ---------- */
+        .footer-note {
+            display: flex;
+            gap: 10px;
+            align-items: flex-start;
+            padding: 16px 22px 22px;
+            font-size: 12px;
+            line-height: 1.6;
+            color: var(--text-faint);
+        }
+
+            .footer-note svg {
+                width: 15px;
+                height: 15px;
+                flex-shrink: 0;
+                margin-top: 2px;
+                color: #5b6494;
+            }
+
+            .footer-note a {
+                color: var(--accent-blue);
+                text-decoration: none;
+                font-weight: 600;
+            }
+
+                .footer-note a:hover {
+                    text-decoration: underline;
+                }
+
+        @@media (prefers-reduced-motion: reduce) {
+            .status-dot, .qr-skeleton {
+                animation: none;
+            }
+        }
+
+        @@media (min-width: 640px) {
+            main.page {
+                padding: 56px 16px;
+            }
+
+            .card-shell {
+                max-width: 480px;
+            }
+        }
+
+        @@media (max-width: 380px) {
+            .intro h1 {
+                font-size: 20px;
+            }
+
+            .brand-text .name {
+                font-size: 15.5px;
+            }
+
+            .badge {
+                font-size: 10.5px;
+                padding: 5px 10px;
+            }
+
+            .qr-frame {
+                width: 165px;
+                height: 165px;
+            }
+        }
+
+        @@media (max-width: 340px) {
+            .brand-header {
+                flex-wrap: wrap;
+                row-gap: 10px;
+            }
+
+            .badge {
+                order: 3;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <main class="page">
+        <div class="card-shell">
+
+            <!-- Header -->
+            <header class="brand-header">
+                <div class="brand-mark">
+                    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <rect x="3" y="7" width="18" height="12" rx="2" stroke="white" stroke-width="1.8" />
+                        <path d="M8 7V5.5C8 4.67 8.67 4 9.5 4h5c.83 0 1.5.67 1.5 1.5V7" stroke="white" stroke-width="1.8" />
+                    </svg>
+                </div>
+                <div class="brand-text">
+                    <div class="name">TechCorp Thailand</div>
+                    <div class="sub">ระบบสมัครงานออนไลน์</div>
+                </div>
+                <div class="badge">Digital Document Verification</div>
+            </header>
+
+            <!-- Intro -->
+            <section class="intro">
+                <h1>ยืนยันตัวตน</h1>
+                <p>บริษัทต้องการตรวจสอบข้อมูลจากเอกสารดิจิทัลของคุณ</p>
+            </section>
+
+            <!-- Requested data -->
+            <section class="data-list">
+                <div class="list-title">
+                    <span>🗂️</span>
+                    <span>ข้อมูลที่บริษัทขอดู</span>
+                </div>
+
+                <div class="data-row">
+                    <div class="row-icon icon-user">👤</div>
+                    <div class="row-text">
+                        <span class="label">ชื่อ-นามสกุล</span>
+                        <span class="field">full_name</span>
+                    </div>
+                </div>
+
+                <div class="data-row">
+                    <div class="row-icon icon-degree">🎓</div>
+                    <div class="row-text">
+                        <span class="label">วุฒิการศึกษา</span>
+                        <span class="field">Degree</span>
+                    </div>
+                </div>
+
+                <div class="data-row">
+                    <div class="row-icon icon-major">📚</div>
+                    <div class="row-text">
+                        <span class="label">สาขาวิชา</span>
+                        <span class="field">Major</span>
+                    </div>
+                </div>
+                <div class="data-row">
+                    <div class="row-icon icon-gpa">📊</div>
+                    <div class="row-text">
+                        <span class="label">เกรดเฉลี่ย</span>
+                        <span class="field">GPA</span>
+                    </div>
+                </div>
+                <div class="data-row">
+                    <div class="row-icon icon-graduated">📅</div>
+                    <div class="row-text">
+                        <span class="label">วันที่จบการศึกษา</span>
+                        <span class="field">Graduated</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- QR / Deeplink panel: only ONE of these two views is shown, chosen by JS below -->
+            <section class="qr-panel">
+
+                <div id="qrView">
+                    <div class="qr-caption">สแกน QR Code ด้วย Wallet App เพื่อส่งคำร้องตรวจสอบข้อมูล</div>
+
+                    <div class="qr-frame" id="qrFrame">
+                        <div class="qr-skeleton" id="qrSkeleton"></div>
+                        <img id="qr" alt="QR Code สำหรับสแกนด้วย Wallet App" />
+                    </div>
+
+                    <div class="scan-line">
+                        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <rect x="4" y="2" width="16" height="20" rx="2.5" stroke="#1a2140" stroke-width="1.8" />
+                            <line x1="9" y1="18.5" x2="15" y2="18.5" stroke="#1a2140" stroke-width="1.8" stroke-linecap="round" />
+                        </svg>
+                        <span>สแกนเพื่อยืนยันตัวตน</span>
+                    </div>
+                    <div class="helper">เปิด Wallet App แล้วสแกน QR Code นี้</div>
+                </div>
+
+                <div id="deeplinkView">
+                    <div class="qr-caption">กดปุ่มด้านล่างเพื่อเปิด Wallet App บนเครื่องนี้</div>
+
+                    <div class="deeplink-icon">
+                        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <rect x="6" y="2" width="12" height="20" rx="2.5" stroke="white" stroke-width="1.8" />
+                            <line x1="10" y1="18.5" x2="14" y2="18.5" stroke="white" stroke-width="1.8" stroke-linecap="round" />
+                        </svg>
+                    </div>
+
+                    <a id="openWalletBtn" class="open-wallet-btn" href="#">
+                        เปิด Wallet App เพื่อยืนยันตัวตน
+                    </a>
+                    <div class="helper">ถ้ายังไม่ได้ติดตั้ง Wallet App ระบบจะพาไปหน้าดาวน์โหลดให้อัตโนมัติ</div>
+                </div>
+
+                <span class="status-pill" id="statusPill">
+                    <span class="status-dot"></span>
+                    <span id="statusText">รอการตอบกลับจาก Wallet App...</span>
+                </span>
+            </section>
+
+            <!-- Footer note -->
+            <div class="footer-note">
+                <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <rect x="5" y="11" width="14" height="9" rx="2" stroke="currentColor" stroke-width="1.6" />
+                    <path d="M8 11V7.5C8 5.01 10.01 3 12.5 3s4.5 2.01 4.5 4.5V11" stroke="currentColor" stroke-width="1.6" />
+                </svg>
+                <span>
+                    ข้อมูลถูกเข้ารหัสและตรวจสอบด้วย <a href="#">Digital Signature</a> — บริษัทได้รับเฉพาะข้อมูลที่คุณอนุมัติเท่านั้น
+                </span>
+            </div>
+
+        </div>
+    </main>
+
+    <script>
+        // จุดตัดสินใจเดียวในหน้านี้: เช็คอุปกรณ์ครั้งเดียวตอนโหลดหน้า แล้วเลือกเปิด
+        // แค่ view เดียว (qrView หรือ deeplinkView) - เป็นการเดาจาก User-Agent เหมือนที่คุยกันไว้
+        // ไม่แม่นยำ 100% (เช่น iPad ที่รายงานตัวเองเป็น desktop) แต่ user ไม่ต้องเลือกเอง
+        const isMobileOrTablet = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+
+        async function loadPresentationRequest() {
+            const qrFrame = document.getElementById("qrFrame");
+            const qrImg = document.getElementById("qr");
+            const openWalletBtn = document.getElementById("openWalletBtn");
+            const statusPill = document.getElementById("statusPill");
+            const statusText = document.getElementById("statusText");
+
+            document.getElementById(isMobileOrTablet ? "deeplinkView" : "qrView").style.display = "block";
+
+            try {
+                const res = await fetch('/generate-vp-qr', {
+                    method: 'POST',
+                    credentials: 'include', // ใช้ cookie จาก login
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ document_type: "Transcript" })
+                });
+
+                if (!res.ok) throw new Error("HTTP " + res.status);
+
+                const data = await res.json();
+                console.log(data);
+
+                // backend คืนค่า 2 URI ที่ต่างกัน: deeplinkUri (walletapp://callback) สำหรับปุ่ม
+                // same-device, กับ qrImageBase64/qrText (openid4vp://authorize) สำหรับ QR cross-device
+                if (isMobileOrTablet) {
+                    if (!data.deeplink_uri) throw new Error("Response missing deeplinkUri");
+                    openWalletBtn.href = data.deeplink_uri;
+                } else {
+                            if (!data.qr_image_base64) throw new Error("Response missing qrImageBase64");
+                    qrImg.src = "data:image/png;base64," + data.qr_image_base64;
+                    qrImg.onload = function () { qrFrame.classList.add("is-loaded"); };
+                }
+
+                statusText.textContent = "รอการตอบกลับจาก Wallet App...";
+                statusPill.classList.remove("is-error");
+            } catch (err) {
+                console.error("โหลดคำร้องไม่สำเร็จ:", err);
+                statusText.textContent = "โหลดคำร้องไม่สำเร็จ ลองใหม่อีกครั้ง";
+                statusPill.classList.add("is-error");
+            }
+        }
+
+        document.addEventListener("DOMContentLoaded", function () {
+            loadPresentationRequest();
+        });
+    </script>
+
+</body>
+</html>

@@ -1,0 +1,1427 @@
+﻿<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>จุดตรวจสอบ — OIDC4VP Infrared Scan Terminal</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@@400;500;600;700&family=IBM+Plex+Sans+Thai:wght@@300;400;500;600;700&family=JetBrains+Mono:wght@@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-void: #0a0c09;
+            --bg-panel: #14170f;
+            --bg-panel-2: #191c14;
+            --line: #2a2f22;
+            --line-soft: #20241a;
+            --ir-red: #ff2a1f;
+            --ir-red-glow: rgba(255,42,31,0.45);
+            --ir-red-dim: #5c130e;
+            --amber: #f5a623;
+            --green: #34d399;
+            --green-glow: rgba(52,211,153,0.35);
+            --text-hi: #eef1e9;
+            --text-mid: #a9b09e;
+            --text-dim: #6c7263;
+            --font-display: 'Space Grotesk', sans-serif;
+            --font-thai: 'IBM Plex Sans Thai', sans-serif;
+            --font-mono: 'JetBrains Mono', monospace;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background: radial-gradient(ellipse at 20% -10%, #1b2013 0%, transparent 55%), radial-gradient(ellipse at 90% 110%, #1a1108 0%, transparent 50%), var(--bg-void);
+            color: var(--text-hi);
+            font-family: var(--font-thai);
+            min-height: 100vh;
+            padding: 28px 20px 60px;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        .wrap {
+            max-width: 1180px;
+            margin: 0 auto;
+        }
+
+        /* ---------- top bar ---------- */
+        .topbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding-bottom: 18px;
+            margin-bottom: 22px;
+            border-bottom: 1px solid var(--line);
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .brand-mark {
+            width: 34px;
+            height: 34px;
+            border-radius: 7px;
+            background: linear-gradient(150deg, var(--ir-red), var(--ir-red-dim));
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 0 18px var(--ir-red-glow);
+            flex: none;
+        }
+
+            .brand-mark svg {
+                width: 18px;
+                height: 18px;
+            }
+
+        .brand-text .t1 {
+            font-family: var(--font-display);
+            font-weight: 700;
+            font-size: 15px;
+            letter-spacing: 0.02em;
+        }
+
+        .brand-text .t2 {
+            font-family: var(--font-mono);
+            font-size: 10.5px;
+            color: var(--text-dim);
+            letter-spacing: 0.06em;
+            margin-top: 1px;
+        }
+
+        .device-status {
+            display: flex;
+            align-items: center;
+            gap: 22px;
+            font-family: var(--font-mono);
+            font-size: 11px;
+            color: var(--text-mid);
+        }
+
+        .dstat {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+        }
+
+        .dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: var(--green);
+            box-shadow: 0 0 8px var(--green-glow);
+        }
+
+            .dot.idle {
+                background: var(--amber);
+                box-shadow: 0 0 8px rgba(245,166,35,.4);
+            }
+
+        h1.headline {
+            font-family: var(--font-thai);
+            font-weight: 600;
+            font-size: 22px;
+            color: var(--text-hi);
+            margin-bottom: 4px;
+        }
+
+        .sub {
+            font-family: var(--font-mono);
+            font-size: 11.5px;
+            color: var(--text-dim);
+            margin-bottom: 26px;
+            letter-spacing: 0.03em;
+        }
+
+        /* ---------- main grid ---------- */
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1.15fr;
+            gap: 22px;
+        }
+        @@media (max-width:880px) {
+            .grid
+
+        {
+            grid-template-columns: 1fr;
+        }
+
+        }
+
+        .panel {
+            background: var(--bg-panel);
+            border: 1px solid var(--line);
+            border-radius: 14px;
+            overflow: hidden;
+        }
+
+        .panel-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 14px 18px;
+            border-bottom: 1px solid var(--line-soft);
+        }
+
+            .panel-head .label {
+                font-family: var(--font-mono);
+                font-size: 10.5px;
+                letter-spacing: 0.12em;
+                text-transform: uppercase;
+                color: var(--text-dim);
+            }
+
+        .badge {
+            font-family: var(--font-mono);
+            font-size: 10px;
+            padding: 3px 9px;
+            border-radius: 100px;
+            border: 1px solid var(--line);
+            color: var(--text-mid);
+            letter-spacing: .04em;
+        }
+
+            .badge.scanning {
+                color: var(--ir-red);
+                border-color: var(--ir-red-dim);
+                background: rgba(255,42,31,.07);
+            }
+
+            .badge.ok {
+                color: var(--green);
+                border-color: #144a37;
+                background: rgba(52,211,153,.07);
+            }
+
+            .badge.fail {
+                color: var(--ir-red);
+                border-color: var(--ir-red-dim);
+                background: rgba(255,42,31,.07);
+            }
+
+        /* ---------- SCANNER BED (left) ---------- */
+        .scanner-body {
+            padding: 22px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .bed {
+            position: relative;
+            width: 100%;
+            max-width: 340px;
+            aspect-ratio: 3/4;
+            background: repeating-linear-gradient(0deg, rgba(255,255,255,0.015) 0 1px, transparent 1px 3px), #0d0f0a;
+            border: 1px solid #22261a;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: inset 0 0 40px rgba(0,0,0,0.6);
+            overflow: hidden;
+        }
+
+            .bed::before {
+                content: '';
+                position: absolute;
+                inset: 0;
+                background: linear-gradient(180deg, rgba(0,0,0,0) 0%, rgba(0,0,0,.35) 100%);
+                pointer-events: none;
+            }
+
+        .phone {
+            width: 150px;
+            height: 290px;
+            border-radius: 22px;
+            background: #181a13;
+            border: 2px solid #2c3120;
+            position: relative;
+            z-index: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 10px 30px rgba(0,0,0,.5);
+            transition: filter .3s ease;
+        }
+
+        .phone-notch {
+            position: absolute;
+            top: 8px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 44px;
+            height: 5px;
+            border-radius: 4px;
+            background: #0d0f0a;
+        }
+
+        .qr {
+            width: 104px;
+            height: 104px;
+            border-radius: 6px;
+            background: #eef1e9;
+            display: grid;
+            grid-template-columns: repeat(7,1fr);
+            grid-template-rows: repeat(7,1fr);
+            padding: 8px;
+            gap: 2px;
+        }
+
+            .qr i {
+                background: #0d0f0a;
+                border-radius: 1px;
+            }
+
+                .qr i.off {
+                    background: transparent;
+                }
+
+        .laser {
+            position: absolute;
+            left: 6%;
+            right: 6%;
+            height: 2px;
+            background: linear-gradient(90deg, transparent, var(--ir-red) 15%, #ffb3ad 50%, var(--ir-red) 85%, transparent);
+            box-shadow: 0 0 12px 2px var(--ir-red-glow), 0 0 30px 6px rgba(255,42,31,.25);
+            top: 50%;
+            opacity: 0;
+            z-index: 2;
+        }
+
+            .laser.on {
+                opacity: 1;
+                animation: sweep 1.3s ease-in-out infinite;
+            }
+        @@keyframes sweep {
+            0%
+
+        {
+            top: 14%;
+        }
+
+        50% {
+            top: 86%;
+        }
+
+        100% {
+            top: 14%;
+        }
+
+        }
+
+        .ir-wash {
+            position: absolute;
+            inset: 0;
+            background: radial-gradient(ellipse at 50% 50%, rgba(255,42,31,.10), transparent 65%);
+            opacity: 0;
+            z-index: 1;
+            transition: opacity .3s;
+        }
+
+            .ir-wash.on {
+                opacity: 1;
+            }
+
+        .led-row {
+            position: absolute;
+            top: 10px;
+            right: 12px;
+            display: flex;
+            gap: 6px;
+            z-index: 3;
+        }
+
+        .led {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: #2a2f22;
+        }
+
+            .led.amber-on {
+                background: var(--amber);
+                box-shadow: 0 0 7px rgba(245,166,35,.7);
+                animation: blink 1s steps(1) infinite;
+            }
+
+            .led.red-on {
+                background: var(--ir-red);
+                box-shadow: 0 0 7px var(--ir-red-glow);
+            }
+
+            .led.green-on {
+                background: var(--green);
+                box-shadow: 0 0 7px var(--green-glow);
+            }
+        @@keyframes blink {
+            50%
+
+        {
+            opacity: .25;
+        }
+
+        }
+
+        .bed-caption {
+            font-family: var(--font-mono);
+            font-size: 10.5px;
+            color: var(--text-dim);
+            margin-top: 14px;
+            text-align: center;
+            letter-spacing: .03em;
+            min-height: 16px;
+        }
+
+            .bed-caption b {
+                color: var(--text-mid);
+                font-weight: 500;
+            }
+
+        .scan-btn-row {
+            display: flex;
+            gap: 10px;
+            margin-top: 18px;
+            width: 100%;
+            max-width: 340px;
+        }
+
+        button {
+            font-family: var(--font-thai);
+            font-weight: 500;
+            font-size: 13px;
+            cursor: pointer;
+            border-radius: 8px;
+            padding: 11px 16px;
+            border: 1px solid var(--line);
+            background: var(--bg-panel-2);
+            color: var(--text-hi);
+            transition: all .15s ease;
+            flex: 1;
+        }
+
+            button:hover {
+                border-color: #3a4029;
+                background: #1c2016;
+            }
+
+            button.primary {
+                background: var(--ir-red);
+                border-color: var(--ir-red);
+                color: #1a0503;
+                font-weight: 600;
+            }
+
+                button.primary:hover {
+                    background: #ff453b;
+                    box-shadow: 0 0 20px var(--ir-red-glow);
+                }
+
+            button:disabled {
+                opacity: .35;
+                cursor: not-allowed;
+            }
+
+            button.ghost {
+                background: transparent;
+            }
+
+        .fail-toggle {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 14px;
+            font-family: var(--font-mono);
+            font-size: 10.5px;
+            color: var(--text-dim);
+            cursor: pointer;
+            user-select: none;
+        }
+
+            .fail-toggle input {
+                accent-color: var(--ir-red);
+            }
+
+        /* ---------- CONSOLE (right) ---------- */
+        .console-body {
+            padding: 18px;
+        }
+
+        .step {
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            padding: 11px 6px;
+            border-bottom: 1px solid var(--line-soft);
+            opacity: .3;
+            transition: opacity .35s ease;
+        }
+
+            .step:last-child {
+                border-bottom: none;
+            }
+
+            .step.active, .step.done {
+                opacity: 1;
+            }
+
+        .step-icon {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            flex: none;
+            margin-top: 1px;
+            border: 1.5px solid var(--line);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: var(--font-mono);
+            font-size: 10px;
+            color: var(--text-dim);
+            transition: all .25s ease;
+        }
+
+        .step.active .step-icon {
+            border-color: var(--ir-red);
+            color: var(--ir-red);
+            animation: pulse-ring 1s ease-in-out infinite;
+        }
+
+        .step.done .step-icon {
+            border-color: var(--green);
+            background: var(--green);
+            color: #06251a;
+        }
+
+        .step.failed .step-icon {
+            border-color: var(--ir-red);
+            background: var(--ir-red);
+            color: #2a0805;
+        }
+        @@keyframes pulse-ring {
+            0%,100%
+
+        {
+            box-shadow: 0 0 0 0 rgba(255,42,31,.4);
+        }
+
+        50% {
+            box-shadow: 0 0 0 4px rgba(255,42,31,0);
+        }
+
+        }
+
+        .step-text .st-title {
+            font-size: 13px;
+            color: var(--text-hi);
+            font-weight: 500;
+        }
+
+        .step-text .st-sub {
+            font-family: var(--font-mono);
+            font-size: 10.5px;
+            color: var(--text-dim);
+            margin-top: 2px;
+        }
+
+        .log {
+            margin-top: 14px;
+            background: #0d0f0a;
+            border: 1px solid var(--line-soft);
+            border-radius: 8px;
+            padding: 12px 14px;
+            font-family: var(--font-mono);
+            font-size: 10.5px;
+            line-height: 1.7;
+            color: var(--text-mid);
+            max-height: 190px;
+            overflow-y: auto;
+        }
+
+            .log .k {
+                color: #7fa88c;
+            }
+
+            .log .v {
+                color: var(--text-hi);
+            }
+
+            .log .comment {
+                color: var(--text-dim);
+            }
+
+            .log::-webkit-scrollbar {
+                width: 6px;
+            }
+
+            .log::-webkit-scrollbar-thumb {
+                background: var(--line);
+                border-radius: 4px;
+            }
+
+        /* result card */
+        .result {
+            margin-top: 16px;
+            border-radius: 10px;
+            border: 1px solid var(--line);
+            overflow: hidden;
+            display: none;
+        }
+
+            .result.show {
+                display: block;
+            }
+
+        .result-head {
+            padding: 14px 16px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+            .result-head.ok {
+                background: rgba(52,211,153,.08);
+                border-bottom: 1px solid #144a37;
+            }
+
+            .result-head.fail {
+                background: rgba(255,42,31,.08);
+                border-bottom: 1px solid var(--ir-red-dim);
+            }
+
+            .result-head .ricon {
+                width: 26px;
+                height: 26px;
+                border-radius: 50%;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                font-size: 14px;
+                flex: none;
+            }
+
+            .result-head.ok .ricon {
+                background: var(--green);
+                color: #06251a;
+            }
+
+            .result-head.fail .ricon {
+                background: var(--ir-red);
+                color: #2a0805;
+            }
+
+            .result-head .rtitle {
+                font-family: var(--font-thai);
+                font-weight: 600;
+                font-size: 14.5px;
+            }
+
+            .result-head.ok .rtitle {
+                color: var(--green);
+            }
+
+            .result-head.fail .rtitle {
+                color: var(--ir-red);
+            }
+
+            .result-head .rsub {
+                font-family: var(--font-mono);
+                font-size: 10px;
+                color: var(--text-dim);
+                margin-top: 2px;
+            }
+
+        .claims {
+            padding: 14px 16px;
+        }
+
+        .claim-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 7px 0;
+            border-bottom: 1px dashed var(--line-soft);
+            font-size: 12.5px;
+        }
+
+            .claim-row:last-child {
+                border-bottom: none;
+            }
+
+            .claim-row .ck {
+                color: var(--text-dim);
+                font-family: var(--font-mono);
+                font-size: 10.5px;
+            }
+
+            .claim-row .cv {
+                color: var(--text-hi);
+                font-weight: 500;
+            }
+
+        .footnote {
+            margin-top: 22px;
+            font-family: var(--font-mono);
+            font-size: 10px;
+            color: var(--text-dim);
+            line-height: 1.7;
+            border-top: 1px solid var(--line);
+            padding-top: 16px;
+        }
+
+        /* ---------- document type request selector ---------- */
+        .doctype-panel {
+            margin-bottom: 22px;
+        }
+
+        .doctype-body {
+            padding: 16px 18px 18px;
+        }
+
+        .doctype-hint {
+            font-family: var(--font-mono);
+            font-size: 10.5px;
+            color: var(--text-dim);
+            margin-bottom: 13px;
+            line-height: 1.6;
+        }
+
+        .doctype-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(210px,1fr));
+            gap: 10px;
+        }
+
+        .doctype-chip {
+            position: relative;
+            display: flex;
+            gap: 10px;
+            align-items: flex-start;
+            padding: 11px 12px;
+            border-radius: 9px;
+            border: 1px solid var(--line);
+            background: var(--bg-panel-2);
+            cursor: pointer;
+            transition: all .15s ease;
+        }
+
+            .doctype-chip:hover {
+                border-color: #3a4029;
+            }
+
+            .doctype-chip input {
+                position: absolute;
+                opacity: 0;
+                width: 0;
+                height: 0;
+            }
+
+            .doctype-chip .box {
+                width: 16px;
+                height: 16px;
+                border-radius: 50%;
+                border: 1.5px solid var(--line);
+                flex: none;
+                margin-top: 1px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                transition: all .15s ease;
+            }
+
+                .doctype-chip .box::after {
+                    content: '';
+                    width: 7px;
+                    height: 7px;
+                    border-radius: 50%;
+                    background: #1a0503;
+                    opacity: 0;
+                    transition: opacity .15s ease;
+                }
+
+            .doctype-chip.selected {
+                border-color: var(--ir-red-dim);
+                background: rgba(255,42,31,.06);
+            }
+
+                .doctype-chip.selected .box {
+                    background: var(--ir-red);
+                    border-color: var(--ir-red);
+                }
+
+                    .doctype-chip.selected .box::after {
+                        opacity: 1;
+                    }
+
+            .doctype-chip .dc-label {
+                font-size: 12.5px;
+                font-weight: 500;
+                color: var(--text-hi);
+            }
+
+            .doctype-chip .dc-format {
+                font-family: var(--font-mono);
+                font-size: 9.5px;
+                color: var(--text-dim);
+                margin-top: 3px;
+                letter-spacing: .03em;
+            }
+
+        .doctype-empty-warn {
+            font-family: var(--font-mono);
+            font-size: 10.5px;
+            color: var(--ir-red);
+            margin-top: 12px;
+            display: none;
+        }
+
+            .doctype-empty-warn.show {
+                display: block;
+            }
+
+        /* ---------- wallet request URI (แสดงหลังได้ openid4vp:// URI จาก /verifier/scan) ---------- */
+        .wallet-qr-box {
+            display: none;
+            margin-top: 16px;
+            border-radius: 10px;
+            border: 1px solid var(--ir-red-dim);
+            background: rgba(255,42,31,.05);
+            padding: 16px 18px;
+        }
+
+            .wallet-qr-box.show {
+                display: block;
+            }
+
+            .wallet-qr-box .wq-title {
+                font-family: var(--font-thai);
+                font-weight: 600;
+                font-size: 13px;
+                color: var(--text-hi);
+                margin-bottom: 4px;
+            }
+
+            .wallet-qr-box .wq-sub {
+                font-family: var(--font-mono);
+                font-size: 10px;
+                color: var(--text-dim);
+                margin-bottom: 12px;
+            }
+
+            .wallet-qr-box .wq-uri {
+                font-family: var(--font-mono);
+                font-size: 11px;
+                color: var(--text-hi);
+                background: #0d0f0a;
+                border: 1px solid var(--line-soft);
+                border-radius: 8px;
+                padding: 10px 12px;
+                word-break: break-all;
+                user-select: all;
+            }
+
+            .wallet-qr-box .wq-status {
+                font-family: var(--font-mono);
+                font-size: 10.5px;
+                color: var(--amber);
+                margin-top: 12px;
+            }
+    </style>
+</head>
+<body>
+    <div class="wrap">
+
+        <div class="topbar">
+            <div class="brand">
+                <div class="brand-mark">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="#1a0503" stroke-width="2.4" stroke-linecap="round"><path d="M4 8V5a1 1 0 0 1 1-1h3M20 8V5a1 1 0 0 0-1-1h-3M4 16v3a1 1 0 0 0 1 1h3M20 16v3a1 1 0 0 1-1 1h-3M8 12h8" /></svg>
+                </div>
+                <div class="brand-text">
+                    <div class="t1">IR-SCAN VERIFIER</div>
+                    <div class="t2">TERMINAL#04 · GATE-B</div>
+                </div>
+            </div>
+            <div class="device-status">
+                <div class="dstat"><span class="dot idle" id="netDot"></span>NETWORK OK</div>
+                <div class="dstat"><span class="dot idle" id="scannerDot"></span><span id="scannerDotLabel">กำลังเริ่มระบบดักจับข้อมูลสแกน...</span></div>
+            </div>
+        </div>
+
+        <h1 class="headline">จำลองการตรวจสอบ: Verifier สแกน QR ของ Holder ด้วยเครื่องอ่านอินฟราเรด</h1>
+        <div class="sub">OpenID for Verifiable Presentations · cross-device flow · vp_token verification</div>
+
+        <div class="panel doctype-panel">
+            <div class="panel-head">
+                <span class="label">Requested Credential Type</span>
+                <span class="badge" id="doctypeBadge">ยังไม่เลือก</span>
+            </div>
+            <div class="doctype-body">
+                <div class="doctype-hint">เลือกประเภทเอกสารที่ verifier ต้องการให้ holder แสดง (เลือกได้ครั้งละ 1 ประเภท) — ระบบจะสร้าง presentation_definition / dcql_query จากรายการที่เลือก และแสดงเฉพาะ claims ที่เกี่ยวข้องหลังตรวจสอบผ่าน</div>
+                <div class="doctype-grid" id="doctypeGrid"></div>
+                <div class="doctype-empty-warn" id="doctypeWarn">โปรดเลือกประเภทเอกสาร ก่อนเริ่มสแกน</div>
+            </div>
+        </div>
+
+        <div class="grid">
+
+            <!-- LEFT: physical scanner -->
+            <div class="panel">
+                <div class="panel-head">
+                    <span class="label">Scanner Bed</span>
+                    <span class="badge" id="scanBadge">รอการสแกน</span>
+                </div>
+                <div class="scanner-body">
+                    <div class="bed" id="bed">
+                        <div class="led-row">
+                            <span class="led" id="ledAmber"></span>
+                            <span class="led" id="ledRed"></span>
+                            <span class="led" id="ledGreen"></span>
+                        </div>
+                        <div class="ir-wash" id="irWash"></div>
+                        <div class="phone" id="phone">
+                            <div class="phone-notch"></div>
+                            <div class="qr" id="qrGrid"></div>
+                        </div>
+                        <div class="laser" id="laser"></div>
+                    </div>
+                    <div class="bed-caption" id="bedCaption">ยิงบาร์โค้ด/QR ของ Holder ด้วยเครื่องอ่าน — เครื่องจะพิมพ์ข้อมูลเข้าเว็บอัตโนมัติ ระบบจะเริ่มตรวจสอบทันทีที่รับข้อมูล</div>
+
+                    <div class="scan-btn-row">
+                        <button class="primary" id="scanBtn" onclick="startScan()">จำลองการสแกน (โหมดทดสอบ)</button>
+                        <button class="ghost" id="resetBtn" onclick="resetAll()" disabled>รีเซ็ต</button>
+                    </div>
+                   @*  <label class="fail-toggle">
+                        <input type="checkbox" id="forceFail"> จำลองกรณีตรวจสอบไม่ผ่าน (invalid signature)
+                    </label> *@
+                </div>
+            </div>
+
+            <!-- RIGHT: verification console -->
+            <div class="panel">
+                <div class="panel-head">
+                    <span class="label">Verification Console</span>
+                    <span class="badge" id="consoleBadge">IDLE</span>
+                </div>
+                <div class="console-body">
+
+                    <div class="step" id="step1">
+                        <div class="step-icon">1</div>
+                        <div class="step-text">
+                            <div class="st-title">อ่านสัญญาณอินฟราเรดและถอดรหัส QR</div>
+                            <div class="st-sub">decode payload → openid4vp:// authorization request URI</div>
+                        </div>
+                    </div>
+                    <div class="step" id="step2">
+                        <div class="step-icon">2</div>
+                        <div class="step-text">
+                            <div class="st-title">ตรวจสอบ vp_token และรูปแบบ credential</div>
+                            <div class="st-sub">parse vp_token → format: dc+sd-jwt / mso_mdoc</div>
+                        </div>
+                    </div>
+                    <div class="step" id="step3">
+                        <div class="step-icon">3</div>
+                        <div class="step-text">
+                            <div class="st-title">ตรวจลายเซ็นและการผูก holder (holder binding)</div>
+                            <div class="st-sub">verify issuer signature + key binding JWT (KB-JWT)</div>
+                        </div>
+                    </div>
+                    <div class="step" id="step4">
+                        <div class="step-icon">4</div>
+                        <div class="step-text">
+                            <div class="st-title">ตรวจสอบตรงกับ presentation definition</div>
+                            <div class="st-sub">match disclosed claims against requested constraints</div>
+                        </div>
+                    </div>
+
+                    <div class="log" id="logBox">
+                        <div class="comment">// รอเริ่มการสแกน...</div>
+                    </div>
+
+                    <div class="wallet-qr-box" id="walletQrBox">
+                        <div class="wq-title">openid4vp:// authorization request URI</div>
+                        <div class="wq-sub">Wallet จะดึงค่านี้ไปดำเนินการเอง</div>
+                        <div class="wq-uri" id="walletUriText"></div>
+                        <div class="wq-status" id="walletQrStatus">รอ Wallet ดำเนินการ...</div>
+                    </div>
+
+                    <div class="result" id="result">
+                        <div class="result-head" id="resultHead">
+                            <div class="ricon" id="resultIcon">✓</div>
+                            <div>
+                                <div class="rtitle" id="resultTitle">ตรวจสอบผ่าน</div>
+                                <div class="rsub" id="resultSub">verified at --:--:--</div>
+                            </div>
+                        </div>
+                        <div class="claims" id="claimsBox"></div>
+                    </div>
+
+                </div>
+            </div>
+
+        </div>
+
+        <div class="footnote">
+            หน้าจำลองนี้ใช้แสดงลำดับขั้นตอนของฝั่ง Verifier เมื่อสแกน QR code ที่ Holder แสดงบนอุปกรณ์ ผ่านเครื่องอ่านบาร์โค้ด/QR แบบเลเซอร์อินฟราเรด แล้วจึงตรวจสอบ Verifiable Presentation ตามสเปก OpenID4VP (parse → verify signature → validate holder binding → match presentation definition) ข้อมูล credential ที่แสดงเป็นข้อมูลตัวอย่างทั้งหมด ไม่ใช่ข้อมูลจริง
+        </div>
+
+    </div>
+
+    <script>
+        // build a pseudo-random QR pattern
+        const qrGrid = document.getElementById('qrGrid');
+        const pattern = [1,1,1,0,1,1,1, 1,0,1,0,1,0,1, 1,1,0,1,0,1,1, 0,0,1,1,1,0,0, 1,1,0,0,0,1,1, 1,0,1,1,1,0,1, 1,1,1,0,1,1,1];
+        pattern.forEach(v=>{
+          const cell = document.createElement('i');
+          if(!v) cell.classList.add('off');
+          qrGrid.appendChild(cell);
+        });
+
+        // ---------- requested credential types ----------
+        const docTypes = [
+          {
+            id:'idcard', label:'บัตรประชาชนดิจิทัล', format:'dc+sd-jwt',
+            pd:'idcard-pd', doctype:'IDCard', apiDocType:'IDCard',
+            claims:[
+              {k:'id_number', v:'1-XXXX-XXXXX-XX-X'},
+              {k:'full_name', v:'SIRIPORN THONGDEE'},
+              {k:'birthdate', v:'1998-04-12'},
+              {k:'address', v:'123 หมู่ 4 ต.บางรัก อ.เมือง จ.กรุงเทพฯ'},
+              {k:'expiry_date', v:'2030-04-12'},
+              {k:'religion', v:'พุทธ'}
+            ]
+          },
+          {
+            id:'mdl', label:'ใบขับขี่ดิจิทัล (mDL)', format:'dc+sd-jwt',
+            pd:'mdl-pd', doctype:'driverlicense', apiDocType:'DriverLicense',
+            claims:[
+              {k:'license_number', v:'62-XXXXXXX'},
+              {k:'full_name', v:'SIRIPORN THONGDEE'},
+              {k:'birthdate', v:'1998-04-12'},
+              {k:'address', v:'123 หมู่ 4 ต.บางรัก อ.เมือง จ.กรุงเทพฯ'},
+              {k:'license_class', v:'B'},
+              {k:'issue_date', v:'2024-11-30'},
+              {k:'expiry_date', v:'2029-11-30'},
+              {k:'vehicle_categories', v:'A, B'}
+            ]
+          }
+        ];
+
+        let selectedDocType = 'idcard'; // sensible default, single selection
+        const doctypeGrid = document.getElementById('doctypeGrid');
+        const doctypeBadge = document.getElementById('doctypeBadge');
+        const doctypeWarn = document.getElementById('doctypeWarn');
+
+        function renderDocTypes(){
+          doctypeGrid.innerHTML = '';
+          docTypes.forEach(dt=>{
+            const label = document.createElement('label');
+            label.className = 'doctype-chip' + (selectedDocType === dt.id ? ' selected':'');
+            label.innerHTML = `
+              <input type="radio" name="doctype-radio" data-id="${dt.id}" ${selectedDocType === dt.id ? 'checked':''}>
+              <span class="box"></span>
+              <span>
+                <div class="dc-label">${dt.label}</div>
+                <div class="dc-format">${dt.format} · ${dt.doctype}</div>
+              </span>
+            `;
+            const input = label.querySelector('input');
+            input.addEventListener('change', ()=>{
+              selectedDocType = dt.id;
+              renderDocTypes();
+              if(!running) syncScanBtn();
+            });
+            doctypeGrid.appendChild(label);
+          });
+          updateDocTypeBadge();
+        }
+        function updateDocTypeBadge(){
+          const dt = docTypes.find(d => d.id === selectedDocType);
+          doctypeBadge.textContent = dt ? dt.label : 'ยังไม่เลือก';
+          doctypeBadge.className = 'badge' + (dt ? ' ok' : ' fail');
+        }
+        function syncScanBtn(){
+          const none = !selectedDocType;
+          scanBtn.disabled = none;
+          doctypeWarn.classList.toggle('show', none);
+        }
+
+        const scanBtn = document.getElementById('scanBtn');
+        const resetBtn = document.getElementById('resetBtn');
+        const laser = document.getElementById('laser');
+        const irWash = document.getElementById('irWash');
+        const scanBadge = document.getElementById('scanBadge');
+        const consoleBadge = document.getElementById('consoleBadge');
+        const bedCaption = document.getElementById('bedCaption');
+        const ledAmber = document.getElementById('ledAmber');
+        const ledRed = document.getElementById('ledRed');
+        const ledGreen = document.getElementById('ledGreen');
+        const scannerDot = document.getElementById('scannerDot');
+        const scannerDotLabel = document.getElementById('scannerDotLabel');
+        const logBox = document.getElementById('logBox');
+        const result = document.getElementById('result');
+        const resultHead = document.getElementById('resultHead');
+        const resultIcon = document.getElementById('resultIcon');
+        const resultTitle = document.getElementById('resultTitle');
+        const resultSub = document.getElementById('resultSub');
+        const claimsBox = document.getElementById('claimsBox');
+        const walletQrBox = document.getElementById('walletQrBox');
+        const walletUriText = document.getElementById('walletUriText');
+        const walletQrStatus = document.getElementById('walletQrStatus');
+
+        function showWalletUri(uri){
+          walletUriText.textContent = uri;
+          walletQrStatus.textContent = 'รอ Wallet ดำเนินการ...';
+          walletQrBox.classList.add('show');
+        }
+        function hideWalletUri(){
+          walletQrBox.classList.remove('show');
+          walletUriText.textContent = '';
+        }
+
+        let running = false;
+        renderDocTypes();
+        syncScanBtn();
+
+        function log(html){
+          const line = document.createElement('div');
+          line.innerHTML = html;
+          logBox.appendChild(line);
+          logBox.scrollTop = logBox.scrollHeight;
+        }
+        function clearLog(){ logBox.innerHTML = ''; }
+
+        function setStep(n, state){
+          const el = document.getElementById('step'+n);
+          el.classList.remove('active','done','failed');
+          if(state) el.classList.add(state);
+          const icon = el.querySelector('.step-icon');
+          if(state==='done') icon.textContent = '✓';
+          else if(state==='failed') icon.textContent = '×';
+          else icon.textContent = n;
+        }
+
+        function resetAll(){
+          running = false;
+          laser.classList.remove('on');
+          irWash.classList.remove('on');
+          ledAmber.className='led'; ledRed.className='led'; ledGreen.className='led';
+          scanBadge.textContent='รอการสแกน'; scanBadge.className='badge';
+          consoleBadge.textContent='IDLE'; consoleBadge.className='badge';
+          bedCaption.innerHTML='ยิงบาร์โค้ด/QR ของ Holder ด้วยเครื่องอ่าน — เครื่องจะพิมพ์ข้อมูลเข้าเว็บอัตโนมัติ ระบบจะเริ่มตรวจสอบทันทีที่รับข้อมูล';
+          [1,2,3,4].forEach(n=>setStep(n,null));
+          clearLog();
+          log('<span class="comment">// รอเริ่มการสแกน...</span>');
+          result.classList.remove('show');
+          hideWalletUri();
+          syncScanBtn();
+          resetBtn.disabled = true;
+        }
+
+        function wait(ms){ return new Promise(r=>setTimeout(r,ms)); }
+        function escapeHtml(str){
+          const d = document.createElement('div');
+          d.textContent = str;
+          return d.innerHTML;
+        }
+
+        // ดึง stateId จาก openid4vp:// URI ที่ backend ส่งกลับมาจาก /verifier/scan
+        // (ไม่ใช่จาก scanned_value ตอนแรก!) เพราะ backend สร้าง stateId ของตัวเอง
+        // ผ่าน SaveVerifierSession แล้วฝังไว้ใน client_id แบบ:
+        //   client_id=redirect_uri:{baseUrl}/openid4vc/verify/{stateId}
+        // ถ้า HandleQrScanAsync เปลี่ยนรูปแบบ client_id/URI ในอนาคต ต้องแก้ regex นี้ตาม
+        function extractSessionId(openid4vpUriString){
+          let decoded;
+          try { decoded = decodeURIComponent(String(openid4vpUriString)); }
+          catch { decoded = String(openid4vpUriString); } // เผื่อ decode พังเพราะมี % ที่ไม่ใช่ encoding
+          const m = decoded.match(/\/openid4vc\/verify\/([a-zA-Z0-9-]+)/);
+          return m ? m[1] : null;
+        }
+
+        const POLL_INTERVAL_MS = 2500;
+        const POLL_TIMEOUT_MS = 120000; // ยอมรอ wallet ได้สูงสุด 2 นาที ก่อน timeout
+
+        // poll /verifier/status/{sessionId} จนกว่าจะได้ status ที่ไม่ใช่ pending หรือ timeout
+        async function pollForResult(sessionId){
+          const startedAt = Date.now();
+          while(Date.now() - startedAt < POLL_TIMEOUT_MS){
+            await wait(POLL_INTERVAL_MS);
+            const secondsLeft = Math.max(0, Math.round((POLL_TIMEOUT_MS - (Date.now() - startedAt)) / 1000));
+            walletQrStatus.textContent = 'รอ Wallet ดำเนินการ... (เหลือเวลาอีก ' + secondsLeft + ' วิ)';
+            try{
+              const resp = await fetch('/verifier/status/' + encodeURIComponent(sessionId));
+              if(!resp.ok) continue; // ลองใหม่รอบถัดไป ไม่ล้มทันทีเพราะ error ชั่วคราวได้
+              const data = await resp.json();
+              if(data.status === 'completed') return { ok:true, claims: data.claims || {} };
+              if(data.status === 'failed') return { ok:false, error: data.error || 'verification_failed' };
+              // status === 'pending' → วนต่อ
+            } catch(err){
+              console.error('[verifier/status] poll error:', err);
+              // network error ชั่วคราว ไม่ล้มทันที ลองรอบถัดไป
+            }
+          }
+          return { ok:false, error: 'timeout' };
+        }
+
+        // ---------- HID keyboard-wedge scanner listener ----------
+        // เครื่องสแกนโหมด HID จะ "พิมพ์" ข้อมูลเข้าหน้าเว็บเหมือนคีย์บอร์ด
+        // บางรุ่น/บาง config จะปิดท้ายด้วย Enter, บางรุ่นไม่ส่งอะไรปิดท้ายเลย
+        // จึงใช้ 2 กลไกร่วมกัน: (1) ถ้าเจอ Enter ให้จบทันที (2) ถ้าเงียบไปช่วงสั้น ๆ
+        // หลังเริ่มสะสมตัวอักษร (debounce) ให้ถือว่าสแกนจบแล้วแม้ไม่มี Enter
+        //
+        // สำคัญ: อ่านค่าจาก e.code (ตำแหน่งปุ่มกายภาพ) แล้ว map เป็นตัวอักษรแบบ
+        // US-QWERTY เอง แทนการใช้ e.key ตรง ๆ เพราะ e.key จะถูกแปลตาม keyboard
+        // layout ของ OS ที่ตั้งไว้ตอนนั้น (เช่นถ้า Windows ตั้ง layout เป็นไทย
+        // ตัวอักษรที่ scanner ยิงมาจะกลายเป็นภาษาไทยเพี้ยน ๆ แทนที่จะเป็น URL จริง)
+        // วิธีนี้ทำให้ทำงานถูกต้องไม่ว่า OS จะตั้ง layout อะไรอยู่ก็ตาม
+        const US_KEYMAP = {
+          Digit1:['1','!'], Digit2:['2','@@'], Digit3:['3','#'], Digit4:['4','$'],
+          Digit5:['5','%'], Digit6:['6','^'], Digit7:['7','&'], Digit8:['8','*'],
+          Digit9:['9','('], Digit0:['0',')'],
+          Minus:['-','_'], Equal:['=','+'],
+          BracketLeft:['[','{'], BracketRight:[']','}'], Backslash:['\\','|'],
+          Semicolon:[';',':'], Quote:["'",'"'], Backquote:['`','~'],
+          Comma:[',','<'], Period:['.','>'], Slash:['/','?'], Space:[' ',' ']
+        };
+        'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('').forEach(ch=>{
+          US_KEYMAP['Key'+ch] = [ch.toLowerCase(), ch.toUpperCase()];
+        });
+
+        function mapKeyToChar(e){
+          const pair = US_KEYMAP[e.code];
+          if(!pair) return null;
+          return e.shiftKey ? pair[1] : pair[0];
+        }
+
+        let scanBuffer = '';
+        let lastKeyTime = 0;
+        let finalizeTimer = null;
+        const BURST_RESET_GAP_MS = 300;   // ห่างจากคีย์ก่อนหน้าเกินนี้ = เริ่มรอบใหม่
+        const FINALIZE_DEBOUNCE_MS = 120; // เงียบไปเท่านี้หลังเริ่มสะสม = ถือว่าสแกนจบ
+        const SCAN_MIN_LENGTH = 8;        // กันกรณีกดคีย์ 2-3 ทีบนหน้าเว็บตามปกติ
+
+        function finalizeScan(){
+          if(finalizeTimer){ clearTimeout(finalizeTimer); finalizeTimer = null; }
+          console.debug('[scanner-wedge] buffer received:', JSON.stringify(scanBuffer), '(length ' + scanBuffer.length + ', ต้องการอย่างน้อย ' + SCAN_MIN_LENGTH + ')');
+          if(scanBuffer.length >= SCAN_MIN_LENGTH && !running){
+            const code = scanBuffer;
+            scanBuffer = '';
+            startScan(code);
+          } else {
+            scanBuffer = '';
+          }
+        }
+
+        document.addEventListener('keydown', (e)=>{
+          const now = Date.now();
+          if(now - lastKeyTime > BURST_RESET_GAP_MS) scanBuffer = '';
+          lastKeyTime = now;
+
+          if(e.key === 'Enter'){
+            if(scanBuffer.length >= SCAN_MIN_LENGTH) e.preventDefault();
+            finalizeScan();
+            return;
+          }
+          const ch = mapKeyToChar(e);
+          if(ch !== null){
+            scanBuffer += ch;
+            if(finalizeTimer) clearTimeout(finalizeTimer);
+            finalizeTimer = setTimeout(finalizeScan, FINALIZE_DEBOUNCE_MS);
+          }
+        });
+
+        // ไม่มี API ให้เบราว์เซอร์เช็คสถานะการเชื่อมต่อของเครื่อง HID ได้จริง (ต่างจากโหมด COM)
+        // จึงแสดงแค่สถานะว่า "ตัวดักจับข้อมูลพร้อมทำงาน" เมื่อโหลดหน้าเสร็จ
+        scannerDot.className = 'dot';
+        scannerDotLabel.textContent = 'พร้อมรับข้อมูลจากเครื่องสแกน (โหมดคีย์บอร์ด)';
+
+        async function startScan(payload){
+          if(running || !selectedDocType) return;
+          running = true;
+          const isRealScan = typeof payload === 'string' && payload.length > 0;
+          if(!isRealScan){
+            const dt = docTypes.find(d=>d.id===selectedDocType);
+            payload = 'openid4vp://?client_id=verifier.example.co.th&presentation_definition=' + (dt ? dt.pd : 'unknown-pd') + ' (test mode)';
+          }
+          scanBtn.disabled = true;
+          resetBtn.disabled = true;
+          clearLog();
+          result.classList.remove('show');
+          hideWalletUri();
+          [1,2,3,4].forEach(n=>setStep(n,null));
+
+          // phase: scanning
+          scanBadge.textContent='กำลังสแกน'; scanBadge.className='badge scanning';
+          consoleBadge.textContent='SCANNING'; consoleBadge.className='badge scanning';
+          bedCaption.innerHTML='กำลังถอดรหัสข้อมูลจากเครื่องอ่าน...';
+          ledRed.className='led red-on';
+          laser.classList.add('on');
+          irWash.classList.add('on');
+          await wait(isRealScan ? 400 : 1600);
+
+          const requested = docTypes.filter(dt => dt.id === selectedDocType);
+          const pdList = requested.map(dt => dt.pd).join(', ');
+          const formatList = [...new Set(requested.map(dt => dt.format))].join(', ');
+
+          setStep(1,'active');
+          log('<span class="k">hid.read</span> → ' + (isRealScan ? 'received keystrokes from scanner (keyboard-wedge)' : 'ir.scan → detected optical pattern, decoding...'));
+          await wait(500);
+          log('<span class="k">qr.decode</span> → <span class="v">' + escapeHtml(payload) + '</span>');
+          await wait(500);
+          setStep(1,'done');
+
+          setStep(2,'active');
+          requested.forEach(dt=>{
+            log('<span class="k">vp_token</span> → <span class="v">' + dt.doctype + '</span> <span class="comment">// format=' + dt.format + '</span>');
+          });
+          await wait(700);
+          setStep(2,'done');
+
+          setStep(3,'active');
+          consoleBadge.textContent='REQUESTING'; consoleBadge.className='badge scanning';
+
+          // ---------- เรียก API จริง: /verifier/scan ----------
+          // NOTE: endpoint นี้คืนแค่ openid4vp:// URI (text/plain) ยังไม่ใช่ผลตรวจสอบสุดท้าย
+          // TODO: ต้องต่อ flow ถัดไป (ดู sessionId แล้ว poll/subscribe ผลจริงจาก broker)
+          const apiDocType = (requested[0] && requested[0].apiDocType) || selectedDocType;
+          let openid4vpUri = null;
+          let scanError = null;
+          try{
+            const resp = await fetch('/verifier/scan', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'Accept': '*/*' },
+              body: JSON.stringify({ scanned_value: payload, doc_type: apiDocType })
+            });
+            const bodyText = await resp.text();
+            if(resp.ok){
+              // ปกติเป็น plain text; กันเผื่อ backend ห่อเป็น JSON string ("...") ด้วย content negotiation
+              try { openid4vpUri = JSON.parse(bodyText); } catch { openid4vpUri = bodyText; }
+            } else {
+              try { scanError = JSON.parse(bodyText); } catch { scanError = bodyText; }
+              if(!scanError) scanError = 'http_' + resp.status;
+            }
+          } catch(err){
+            console.error('[verifier/scan] request failed:', err);
+            scanError = 'network_error';
+          }
+
+          if(!openid4vpUri){
+            log('<span class="k">verifier.scan</span> → <span class="v" style="color:#ff2a1f">FAILED — ' + escapeHtml(String(scanError)) + '</span>');
+            setStep(3,'failed');
+            setStep(4,'failed');
+            laser.classList.remove('on');
+            irWash.classList.remove('on');
+            ledRed.className='led red-on';
+            ledGreen.className='led';
+            scanBadge.textContent='ไม่ผ่าน'; scanBadge.className='badge fail';
+            consoleBadge.textContent='REJECTED'; consoleBadge.className='badge fail';
+            bedCaption.innerHTML='<span style="color:#ff2a1f">เริ่มคำขอไม่สำเร็จ — โปรดให้ Holder แสดง QR ใหม่</span>';
+
+            resultHead.className='result-head fail';
+            resultIcon.textContent='×';
+            resultTitle.textContent='เริ่มคำขอไม่สำเร็จ';
+            resultSub.textContent='rejected · reason: ' + String(scanError);
+            claimsBox.innerHTML = `
+              <div class="claim-row"><span class="ck">error</span><span class="cv" style="color:#ff2a1f">${escapeHtml(String(scanError))}</span></div>
+              <div class="claim-row"><span class="ck">requested</span><span class="cv">${requested.map(d=>d.label).join(', ')}</span></div>
+              <div class="claim-row"><span class="ck">action</span><span class="cv">ปฏิเสธการเข้าใช้งาน / แจ้งเตือนเจ้าหน้าที่</span></div>
+            `;
+            result.classList.add('show');
+            running = false;
+            resetBtn.disabled = false;
+            return;
+          }
+
+          log('<span class="k">verifier.scan</span> → <span class="v" style="color:#34d399">OK — got openid4vp:// request URI</span>');
+          log('<span class="k">openid4vp_uri</span> → <span class="v">' + escapeHtml(openid4vpUri) + '</span>');
+          await wait(300);
+          setStep(3,'done');
+
+          setStep(4,'active');
+          consoleBadge.textContent='WAITING_FOR_WALLET'; consoleBadge.className='badge scanning';
+          bedCaption.innerHTML='<span style="color:#f5a623">ได้รับคำขอจาก broker แล้ว — Wallet จะดึงค่า URI ด้านล่างไปดำเนินการต่อเอง</span>';
+          showWalletUri(openid4vpUri);
+          scanBadge.textContent='รอผลจาก Wallet'; scanBadge.className='badge scanning';
+
+          const sessionId = extractSessionId(openid4vpUri);
+          if(!sessionId){
+            log('<span class="k">session_id</span> → <span class="v" style="color:#ff2a1f">แกะ stateId จาก openid4vp URI ไม่ได้ — ข้าม polling</span>');
+            setStep(4,'failed');
+            hideWalletUri();
+            scanBadge.textContent='ไม่ผ่าน'; scanBadge.className='badge fail';
+            consoleBadge.textContent='REJECTED'; consoleBadge.className='badge fail';
+            resultHead.className='result-head fail';
+            resultIcon.textContent='×';
+            resultTitle.textContent='ผิดพลาด';
+            resultSub.textContent='ไม่สามารถแกะ session id ได้';
+            claimsBox.innerHTML = `<div class="claim-row"><span class="ck">error</span><span class="cv" style="color:#ff2a1f">extract_session_id_failed</span></div>`;
+            result.classList.add('show');
+            running = false;
+            resetBtn.disabled = false;
+            return;
+          }
+          log('<span class="k">session_id</span> → <span class="v">' + escapeHtml(sessionId) + '</span>');
+          log('<span class="comment">// เริ่ม poll /verifier/status/' + escapeHtml(sessionId) + ' ทุก ' + (POLL_INTERVAL_MS/1000) + ' วินาที...</span>');
+
+          const pollResult = await pollForResult(sessionId);
+          hideWalletUri();
+
+          if(!pollResult.ok){
+            log('<span class="k">verifier.status</span> → <span class="v" style="color:#ff2a1f">FAILED — ' + escapeHtml(pollResult.error) + '</span>');
+            setStep(4,'failed');
+            ledRed.className='led red-on';
+            ledGreen.className='led';
+            scanBadge.textContent='ไม่ผ่าน'; scanBadge.className='badge fail';
+            consoleBadge.textContent='REJECTED'; consoleBadge.className='badge fail';
+            bedCaption.innerHTML='<span style="color:#ff2a1f">ตรวจสอบไม่ผ่าน — โปรดให้ Holder แสดง QR ใหม่</span>';
+
+            resultHead.className='result-head fail';
+            resultIcon.textContent='×';
+            resultTitle.textContent = pollResult.error === 'timeout' ? 'หมดเวลารอ Wallet' : 'ตรวจสอบไม่ผ่าน';
+            resultSub.textContent='rejected · reason: ' + pollResult.error;
+            claimsBox.innerHTML = `
+              <div class="claim-row"><span class="ck">error</span><span class="cv" style="color:#ff2a1f">${escapeHtml(pollResult.error)}</span></div>
+              <div class="claim-row"><span class="ck">session_id</span><span class="cv">${escapeHtml(sessionId)}</span></div>
+              <div class="claim-row"><span class="ck">action</span><span class="cv">ปฏิเสธการเข้าใช้งาน / แจ้งเตือนเจ้าหน้าที่</span></div>
+            `;
+            result.classList.add('show');
+            running = false;
+            resetBtn.disabled = false;
+            return;
+          }
+
+          log('<span class="k">verifier.status</span> → <span class="v" style="color:#34d399">OK — wallet ส่ง VP กลับมาแล้ว</span>');
+          setStep(4,'done');
+
+          ledRed.className='led';
+          ledGreen.className='led green-on';
+          scanBadge.textContent='ผ่านการตรวจสอบ'; scanBadge.className='badge ok';
+          consoleBadge.textContent='VERIFIED'; consoleBadge.className='badge ok';
+          bedCaption.innerHTML='<span style="color:#34d399">ตรวจสอบผ่าน — อนุญาตให้เข้าใช้งาน</span>';
+
+          const now = new Date().toLocaleTimeString('th-TH');
+          resultHead.className='result-head ok';
+          resultIcon.textContent='✓';
+          resultTitle.textContent='ตรวจสอบผ่าน';
+          resultSub.textContent='verified at '+now;
+
+          const claims = pollResult.claims || {};
+          let rows = '';
+          Object.keys(claims).forEach(key=>{
+            rows += `<div class="claim-row"><span class="ck">${escapeHtml(key)}</span><span class="cv">${escapeHtml(String(claims[key]))}</span></div>`;
+          });
+          if(rows === ''){
+            rows = `<div class="claim-row"><span class="ck">info</span><span class="cv">ตรวจสอบผ่าน แต่ไม่มี claims ส่งกลับมา</span></div>`;
+          }
+          claimsBox.innerHTML = rows;
+          result.classList.add('show');
+          running = false;
+          resetBtn.disabled = false;
+        }
+    </script>
+</body>
+</html>

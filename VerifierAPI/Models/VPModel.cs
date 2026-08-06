@@ -81,6 +81,8 @@ namespace VerifierAPI.Models
     {
         public string AuthorizationRequestUri { get; set; } = string.Empty;
         public string QrText { get; set; } = string.Empty;
+        public string DeeplinkUri { get; set; }
+
         public string? QrImageBase64 { get; set; }
         public string State { get; set; } = string.Empty;
         public string Nonce { get; set; } = string.Empty;
@@ -223,4 +225,6 @@ namespace VerifierAPI.Models
         public string stateId { set; get; }
         public string nonce { get; set; }
     }
+
+    
 }

@@ -66,5 +66,28 @@ namespace VerifierAPI.Service
 
             return docu;
         }
+
+        public Dbdocumenttype GetRequestByDocType(string type_id)
+        {
+            string docuType = null;
+            Dbdocumenttype docu = null;
+            using (VerifierDbContext dbContext = new VerifierDbContext())
+            {
+
+                if (!string.IsNullOrEmpty(type_id))
+                {
+                    docu = dbContext.Dbdocumenttypes.Where(i => i.TypeId.Contains(type_id) && i.IsActive == true).FirstOrDefault();
+                    if (docu != null)
+                    {
+                        return docu;
+                    }
+                }
+
+
+            }
+
+
+            return null;
+        }
     }
 }

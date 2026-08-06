@@ -65,5 +65,20 @@ namespace VerifierAPI.Controllers
             //return Content(baseUrl);
 
         }
+
+        public IActionResult VerifyResult()
+        {
+            return View();
+
+
+            //return Content(baseUrl);
+
+        }
+
+        [HttpGet("/VerifyScanQR")]
+        public IActionResult VerifyScanQR()
+        {
+            return View();
+        }
     }
 }

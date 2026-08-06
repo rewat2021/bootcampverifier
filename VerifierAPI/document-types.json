@@ -1,0 +1,44 @@
+{
+  "driverlicense": {
+    "credentials": [
+      {
+        "id": "driving_license",
+        "format": "mso_mdoc",
+        "meta": { "doctype_value": "org.iso.18013.5.1.mDL" },
+        "claims": [
+          { "path": ["org.iso.18013.5.1", "family_name"] },
+          { "path": ["org.iso.18013.5.1", "given_name"] },
+          { "path": ["org.iso.18013.5.1", "expiry_date"] },
+          { "path": ["org.iso.18013.5.1", "driving_privileges"] }
+        ]
+      }
+    ]
+  },
+  "idcard": {
+    "credentials": [
+      {
+        "id": "national_id",
+        "format": "mso_mdoc",
+        "meta": { "doctype_value": "th.gov.dopa.national_id" },
+        "claims": [
+          { "path": ["th.gov.dopa.national_id", "citizen_id"] },
+          { "path": ["th.gov.dopa.national_id", "family_name"] },
+          { "path": ["th.gov.dopa.national_id", "given_name"] },
+          { "path": ["th.gov.dopa.national_id", "date_of_birth"] }
+        ]
+      }
+    ]
+  },
+  "age_verification": {
+    "credentials": [
+      {
+        "id": "age_check",
+        "format": "mso_mdoc",
+        "meta": { "doctype_value": "org.iso.18013.5.1.mDL" },
+        "claims": [
+          { "path": ["org.iso.18013.5.1", "age_over_18"] }
+        ]
+      }
+    ]
+  }
+}

@@ -682,25 +682,25 @@ namespace VerifierAPI.Controllers
             }
         }
 
-        [HttpGet("/verifier/status/{sessionId}")]
-        public IActionResult GetScanStatus(string sessionId)
-        {
-            if (string.IsNullOrWhiteSpace(sessionId))
-                return BadRequest(new { status = "failed", error = "missing_session_id" });
+        //[HttpGet("/verifier/status/{sessionId}")]
+        //public IActionResult GetScanStatus(string sessionId)
+        //{
+        //    if (string.IsNullOrWhiteSpace(sessionId))
+        //        return BadRequest(new { status = "failed", error = "missing_session_id" });
 
-            var context = new VerifierDbContext();
-            var result = context.Dbverifierresponses
-                .Where(r => r.SessionId == sessionId)
-                .FirstOrDefault();
+        //    var context = new VerifierDbContext();
+        //    var result = context.Dbverifierresponses
+        //        .Where(r => r.SessionId == sessionId)
+        //        .FirstOrDefault();
 
-            // ยังไม่มีแถวเลย = wallet ยังไม่ได้ verify ผ่าน (หรือยังไม่ได้ส่งอะไรกลับมาเลย)
-            // สองกรณีนี้แยกกันไม่ออกจาก DB อย่างเดียว เพราะ VerifierVP ไม่เซฟ row เมื่อ verify ไม่ผ่าน
-            if (result == null || (string.IsNullOrWhiteSpace(result.VpToken) && string.IsNullOrWhiteSpace(result.VcPayload)))
-                return Ok(new { status = "pending" });
+        //    // ยังไม่มีแถวเลย = wallet ยังไม่ได้ verify ผ่าน (หรือยังไม่ได้ส่งอะไรกลับมาเลย)
+        //    // สองกรณีนี้แยกกันไม่ออกจาก DB อย่างเดียว เพราะ VerifierVP ไม่เซฟ row เมื่อ verify ไม่ผ่าน
+        //    if (result == null || (string.IsNullOrWhiteSpace(result.VpToken) && string.IsNullOrWhiteSpace(result.VcPayload)))
+        //        return Ok(new { status = "pending" });
 
-            var claims = ParseClaimsFromVcPayload(result.VcPayload);
-            return Ok(new { status = "completed", claims });
-        }
+        //    var claims = ParseClaimsFromVcPayload(result.VcPayload);
+        //    return Ok(new { status = "completed", claims });
+        //}
 
         private static Dictionary<string, object> ParseClaimsFromVcPayload(string? vcPayload)
         {

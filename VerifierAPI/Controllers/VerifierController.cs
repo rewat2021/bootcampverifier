@@ -32,42 +32,9 @@ namespace VerifierAPI.Controllers
             _logger = logger;
         }
 
-        //[Route("/generate-vp-qr")]
-        //[HttpPost]
-        //public IActionResult VerifierPresentVP([FromBody] GenerateVpQrRequest docType)
-        //{
-
-        //    VCService vcServ = new VCService();
-        //    DBService dbServ = new DBService();
-        //    VpRequestSession model = new VpRequestSession();
-
-        //    baseUrl = Environment.GetEnvironmentVariable("INTERNAL_BASE_URL")
-        //      ?? $"{Request.Scheme}://{Request.Host}"; 
-        //    model = dbServ.SaveVerifierSession(docType.DocumentType.ToString());
-        //    string nonce = model.nonce;
-        //    string stateid = model.stateId;
-
-
-        //    string request_uri = $"{baseUrl}/openid4vc/request/{stateid}";
-        //    var vp = "client_id=redirect_uri:" + $"{baseUrl}/openid4vc/verify/{stateid}"
-        //                                       + "&request_uri=" + request_uri;
-
-        //    string authorizationRequestUri = "openid4vp://authorize?" + vp;
-        //    string QRCode = vcServ.GenerateQrCodeBase64("openid4vp://authorize?" + vp);
-
-        //    //DBService serv = new DBService();
-        //    //serv.SaveRequest(AppContextHelper.UserId, stateid, "VP");
-        //    var response = new GenerateVpQrResponse
-        //    {
-        //        AuthorizationRequestUri = authorizationRequestUri,
-        //        QrText = authorizationRequestUri,
-        //        QrImageBase64 = QRCode,
-        //        State = stateid,
-        //        Nonce = nonce
-        //    };
-
-        //    return Ok(response);
-        //}
+        // FIX (M-08, 2026-08-09): removed a commented-out earlier version of
+        // VerifierPresentVP (superseded by the active version below, which adds
+        // URL-encoding and the same-device deeplink). See M-08 in the audit.
 
         [Route("/generate-vp-qr")]
         [HttpPost]
@@ -113,258 +80,11 @@ namespace VerifierAPI.Controllers
             return Ok(response);
         }
 
-        private object BuildDcqlQuery(DocumentType docType)
-        {
-            return docType switch
-            {
-                DocumentType.Transcript => new
-                {
-                    credentials = new[]
-                    {
-                    new
-                    {
-                        id = "transcript_credential",
-                        format = "jwt_vc_json",
-                        meta = new
-                        {
-                            type_values = new[]
-                            {
-                                new[]
-                                {
-                                    "VerifiableCredential",
-                                    "TranscriptCredential"
-                                }
-                            }
-                        }
-                    }
-                }
-                },
-
-                DocumentType.IDCard => new
-                {
-                    credentials = new[]
-                    {
-                    new
-                    {
-                        id = "idcard_credential",
-                        format = "jwt_vc_json",
-                        meta = new
-                        {
-                            type_values = new[]
-                            {
-                                new []
-                                {
-                                    "VerifiableCredential",
-                                    "IDCardCredential"
-                                }
-
-                            }
-                        }
-                    }
-                }
-                },
-
-                DocumentType.DriverLicense => new
-                {
-                    credentials = new[]
-                    {
-                    new
-                    {
-                        id = "driverlicense_credential",
-                        format = "jwt_vc_json",
-                        meta = new
-                        {
-                            type_values = new[]
-                            {
-                                new []
-                                {
-                                    "VerifiableCredential",
-                                    "DriverLicenseCredential"
-                                }
-
-                            }
-                        }
-                    }
-                }
-                },
-
-                _ => throw new ArgumentOutOfRangeException(nameof(docType), docType, null)
-            };
-        }
-
-        
-
-        
-
-        private object BuildPresentationDefinition(Dbdocumenttype docType)
-        {
-            var vcTypes = JsonConvert.DeserializeObject<string[]>(docType.VcType)
-                          ?? throw new InvalidOperationException($"VcType invalid: {docType.VcType}");
-            var algValues = JsonConvert.DeserializeObject<string[]>(docType.AlgValues)
-                            ?? new[] { "ES256" };
-
-            string format = docType.Format?.ToLower();
-
-            // ใช้ public issuer URL (BASE_URL ของ issuer) สำหรับ vct filter
-            // credential ถูก issue ด้วย ISSUER_PUBLIC_URL → ต้องตรง
-            // ISSUER_PUBLIC_URL หรือ fallback ไปดูจาก ISSUER_BASE_URL
-            string issuerPublicUrl = Environment.GetEnvironmentVariable("ISSUER_PUBLIC_URL")
-              ?? Environment.GetEnvironmentVariable("ISSUER_BASE_URL")
-              ?? Environment.GetEnvironmentVariable("IssuerUrl"); 
-
-            string descriptorId = docType.DocType?.ToLower().Replace(" ", "_") + "_descriptor";
-
-            if (format == "dc+sd-jwt" || format == "vc+sd-jwt")
-            {
-                // SD-JWT: ใช้ format ตรงๆ จาก DB, กรอง $.vct ด้วย public issuer URL
-                return new
-                {
-                    id = "vp_request_" + docType.DocType,
-                    input_descriptors = new[]
-                    {
-                        new
-                        {
-                            id = descriptorId,
-                            format = new Dictionary<string, object>
-                            {
-                                [format] = new { alg = algValues }
-                            },
-                            constraints = new
-                            {
-                                fields = new[]
-                                {
-                                    new
-                                    {
-                                        path = new[] { "$.vct" },
-                                        filter = new
-                                        {
-                                            type = "string",
-                                            @const = issuerPublicUrl + "/credentials/" + docType.Endpoint
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                };
-            }
-
-            // jwt_vc_json: กรอง $.vc.type ด้วย type สุดท้ายใน vcTypes array
-            string credentialType = vcTypes.LastOrDefault() ?? vcTypes[0];
-            return new
-            {
-                id = "vp_request_" + docType.DocType,
-                input_descriptors = new[]
-                {
-                    new
-                    {
-                        id = descriptorId,
-                        format = new Dictionary<string, object>
-                        {
-                            [format ?? "jwt_vc_json"] = new { alg = algValues }
-                        },
-                        constraints = new
-                        {
-                            fields = new[]
-                            {
-                                new
-                                {
-                                    path = new[] { "$.vc.type" },
-                                    filter = new
-                                    {
-                                        type = "array",
-                                        contains = new
-                                        {
-                                            type = "string",
-                                            @const = credentialType
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            };
-        }
-
-        private object BuildDcqlQuery(string docType)
-        {
-            return docType switch
-            {
-                "Transcript" => new
-                {
-                    credentials = new[]
-                    {
-                    new
-                    {
-                        id = "transcript_credential",
-                        format = "jwt_vc_json",
-                        meta = new
-                        {
-                            type_values = new[]
-                            {
-                                new[]
-                                {
-                                    "VerifiableCredential",
-                                    "TranscriptCredential"
-                                }
-                            }
-                        }
-                    }
-                }
-                },
-
-                "IDCard" => new
-                {
-                    credentials = new[]
-                    {
-                    new
-                    {
-                        id = "idcard_credential",
-                        format = "jwt_vc_json",
-                        meta = new
-                        {
-                            type_values = new[]
-                            {
-                                new []
-                                {
-                                    "VerifiableCredential",
-                                    "IDCardCredential"
-                                }
-
-                            }
-                        }
-                    }
-                }
-                },
-
-                "DriverLicense" => new
-                {
-                    credentials = new[]
-                    {
-                    new
-                    {
-                        id = "driverlicense_credential",
-                        format = "jwt_vc_json",
-                        meta = new
-                        {
-                            type_values = new[]
-                            {
-                                new []
-                                {
-                                    "VerifiableCredential",
-                                    "DriverLicenseCredential"
-                                }
-
-                            }
-                        }
-                    }
-                }
-                },
-
-                _ => throw new ArgumentOutOfRangeException(nameof(docType), docType, null)
-            };
-        }
+        // FIX (M-08, 2026-08-09): removed three unused private methods
+        // (BuildDcqlQuery(DocumentType), BuildPresentationDefinition(Dbdocumenttype),
+        // BuildDcqlQuery(string)) — none were called anywhere; the active DCQL
+        // builder is VCService.BuildDcqlQuery(Dbdocumenttype, HttpRequest), used
+        // below in RequestURI. See OID4VP-1.0-COMPLIANCE-AUDIT.md finding M-08.
 
         [Route("request/{id}")]
         [HttpGet]
@@ -374,7 +94,19 @@ namespace VerifierAPI.Controllers
             VCService vcServ = new VCService();
             DBService dbServ = new DBService();
 
-            var baseUrl = $"{Request.Scheme}://{Request.Host}";
+            // FIX (M-05, 2026-08-09): this used to trust Request.Host directly. If
+            // the Wallet's outbound call to /request/{id} arrives with a different
+            // Host than what VerifierPresentVP used to build the client_id embedded
+            // in the QR (e.g. via a misconfigured proxy or forwarded-header setup),
+            // the client_id in this request object would silently disagree with the
+            // one already handed to the Wallet — and, since Phase 1 items 6-8 now
+            // actively check `aud` against session.ClientId, that mismatch would
+            // start failing real presentations instead of just being a correctness
+            // footgun. Now uses the same canonical INTERNAL_BASE_URL as
+            // VerifierPresentVP so both places agree.
+            // See OID4VP-1.0-COMPLIANCE-AUDIT.md finding M-05.
+            var baseUrl = Environment.GetEnvironmentVariable("INTERNAL_BASE_URL")
+              ?? $"{Request.Scheme}://{Request.Host}";
             string stateid = id;
             Dbdocumenttype docType =  dbServ.GetRequestDocType(id);
             if (docType == null)
@@ -462,7 +194,19 @@ namespace VerifierAPI.Controllers
 
         [Route("verify/{id}")]
         [HttpPost]
-        public async Task<IActionResult> VerifierVP([FromForm] string vp_token, [FromForm] string state)//[FromForm] string presentation_submission,)
+        public async Task<IActionResult> VerifierVP(
+            [FromForm] string? vp_token,
+            [FromForm] string state,
+            // FIX (M-01, 2026-08-09): vp_token used to be a required (non-nullable)
+            // parameter, so a legitimate Wallet Authorization Error Response
+            // (error/error_description/state, no vp_token) failed ASP.NET's
+            // automatic model-binding validation as a raw, unhelpful 400 before any
+            // of this method's own code ever ran. vp_token is now optional and
+            // error/error_description/error_uri are accepted and handled explicitly
+            // below. See OID4VP-1.0-COMPLIANCE-AUDIT.md finding M-01.
+            [FromForm] string? error = null,
+            [FromForm] string? error_description = null,
+            [FromForm] string? error_uri = null)//[FromForm] string presentation_submission,)
         {
 
             VCService vpServ = new VCService();
@@ -517,6 +261,43 @@ namespace VerifierAPI.Controllers
                 {
                     error = "invalid_request",
                     error_description = "This session has already been used"
+                });
+            }
+
+            // FIX (M-01, 2026-08-09): a Wallet Authorization Error Response — the
+            // Wallet declining/failing the request — is a normal, spec-defined
+            // outcome, not a malformed request. Record it against the session (as
+            // Failed, distinct from a successful Consumed) instead of leaving the
+            // session dangling as Pending until it expires, and report the Wallet's
+            // own error code back rather than a generic invalid_request.
+            // See OID4VP-1.0-COMPLIANCE-AUDIT.md finding M-01.
+            if (!string.IsNullOrEmpty(error))
+            {
+                logger.Info($"Wallet returned an Authorization Error Response: {error}");
+                try
+                {
+                    session.Status = "Failed";
+                    session.CompletedAt = DateTime.UtcNow;
+                    context.SaveChanges();
+                }
+                catch (Exception)
+                {
+                    // best-effort — still report the Wallet's error below even if
+                    // this write fails
+                }
+                return BadRequest(new
+                {
+                    error,
+                    error_description = error_description ?? "Wallet returned an authorization error"
+                });
+            }
+
+            if (string.IsNullOrEmpty(vp_token))
+            {
+                return BadRequest(new
+                {
+                    error = "invalid_request",
+                    error_description = "Missing vp_token"
                 });
             }
 
@@ -917,26 +698,13 @@ namespace VerifierAPI.Controllers
 #pragma warning restore CS0162
         }
 
-        //[HttpGet("/verifier/status/{sessionId}")]
-        //public IActionResult GetScanStatus(string sessionId)
-        //{
-        //    if (string.IsNullOrWhiteSpace(sessionId))
-        //        return BadRequest(new { status = "failed", error = "missing_session_id" });
-
-        //    var context = new VerifierDbContext();
-        //    var result = context.Dbverifierresponses
-        //        .Where(r => r.SessionId == sessionId)
-        //        .FirstOrDefault();
-
-        //    // ยังไม่มีแถวเลย = wallet ยังไม่ได้ verify ผ่าน (หรือยังไม่ได้ส่งอะไรกลับมาเลย)
-        //    // สองกรณีนี้แยกกันไม่ออกจาก DB อย่างเดียว เพราะ VerifierVP ไม่เซฟ row เมื่อ verify ไม่ผ่าน
-        //    if (result == null || (string.IsNullOrWhiteSpace(result.VpToken) && string.IsNullOrWhiteSpace(result.VcPayload)))
-        //        return Ok(new { status = "pending" });
-
-        //    var claims = ParseClaimsFromVcPayload(result.VcPayload);
-        //    return Ok(new { status = "completed", claims });
-        //}
-
+        // FIX (M-03, 2026-08-09): removed a second, commented-out (non-compiled)
+        // implementation of GET /verifier/status/{sessionId} that duplicated
+        // VerifierScanController.GetScanStatus, the one actually live route for
+        // status polling. Kept ParseClaimsFromVcPayload below since it's a working,
+        // safe SD-JWT-aware claims decoder that's a reasonable starting point for
+        // the "return minimum necessary claims" part of H-08, even though nothing
+        // currently calls it. See OID4VP-1.0-COMPLIANCE-AUDIT.md finding M-03.
         private static Dictionary<string, object> ParseClaimsFromVcPayload(string? vcPayload)
         {
             if (string.IsNullOrWhiteSpace(vcPayload))
@@ -1006,163 +774,9 @@ namespace VerifierAPI.Controllers
             var bytes = Convert.FromBase64String(s);
             return Encoding.UTF8.GetString(bytes);
         }
-        /*public async Task<IActionResult> VerifierVP_old([FromForm] string vp_token,  [FromForm] string state)//[FromForm] string presentation_submission,)
-        {
-
-            VCService vpServ = new VCService();
-            string vc_token = null;
-            string vctoken = null;
-            string vcResult = null;
-            string vp_payload = null;
-            string stateid = null;
-            string details = null;
-            try
-            {
-
-                JWSModel jwsModel = vpServ.ResolvePublicKey(vp_token?.Trim());
-                jwsModel.vptoken = vp_token?.Trim();
-                string didkey = jwsModel.didkey;
-
-                if (string.IsNullOrEmpty(didkey))
-                {
-                    return BadRequest(new
-                    {
-                        error = "invalid_request",
-                        error_description = "Present VP is invalid"
-                    });
-                }
-
-
-               // logs.Add(JsonSerializer.Serialize("=>> " + didkey, new JsonSerializerOptions { WriteIndented = true }));
-
-                Task<string> x = vpServ.ResolveDID(didkey);
-                logger.Info($"vp_token => {vp_token}");
-                logger.Info($"x.Result => {x.Result}");
-                if (vpServ.VerifyJWS(vp_token?.Trim(), x.Result, out string ErrMsg))
-                {
-                    //logs.Add(JsonSerializer.Serialize("Start Verify VC", new JsonSerializerOptions { WriteIndented = true }));
-
-                    //verify vc
-                    JWSModel vcModel = vpServ.ResolvePublicKey(vp_token?.Trim());
-                    vp_payload = vcModel.payload;
-                    stateid = vpServ.ResolveStateID(vcModel.payload);
-                    vctoken = vpServ.VerifyVCToken(vcModel.payload);
-                    vcModel = vpServ.ResolvePublicKey(vctoken);
-
-                    string issuer_did = vcModel.didkey;
-                    //logs.Add(JsonSerializer.Serialize("vc token => " + vctoken, new JsonSerializerOptions { WriteIndented = true }));
-
-                    // ตรวจสอบว่าเป็น SD-JWT หรือไม่
-                    bool isSdJwt = vctoken != null && vctoken.Contains('~');
-                    string jwtForVerify = isSdJwt ? vctoken.Split('~')[0] : vctoken;
-                    vcModel = vpServ.ResolvePublicKey(jwtForVerify);
-                    issuer_did = vcModel.didkey;
-
-
-                    Task<string> vc_x = vpServ.ResolveDID(issuer_did);
-                    logger.Info($"issuer_did => {issuer_did}");
-                    logger.Info($"vctoken => {vctoken}");
-                    logger.Info($"vc_x.Result => {vc_x.Result}");
-                    //check vc jws
-
-                    if (vpServ.VerifyJWS(jwtForVerify, vc_x.Result, out ErrMsg))
-                    {
-                        //vcModel = vpServ.ResolvePublicKey(vctoken);
-                        //byte[] vcDecode = vpServ.Base64UrlDecode(vcModel.payload);
-                        //vcResult = Encoding.UTF8.GetString(vcDecode);
-                        //vc_token = vcModel.payload;
-
-                        vcModel = vpServ.ResolvePublicKey(jwtForVerify);
-                        byte[] vcDecode = vpServ.Base64UrlDecode(vcModel.payload);
-                        vcResult = Encoding.UTF8.GetString(vcDecode);
-                        vc_token = vctoken; // เก็บ VC เต็ม (รวม ~ disclosures ถ้าเป็น SD-JWT)
-
-                        //decodeURIComponent()
-                        //**var data = Json(vcResult);
-                        //logs.Add(JsonSerializer.Serialize(request, new JsonSerializerOptions { WriteIndented = true }));
-                        // logs.Add(JsonSerializer.Serialize("========= Result VC ==========", new JsonSerializerOptions { WriteIndented = true }));
-                        //logs.Add(JsonSerializer.Serialize(vcResult, new JsonSerializerOptions { WriteIndented = true }));
-                    }
-
-
-                }
-                else
-                {
-                    
-                    return BadRequest(new
-                    {
-                        error = "invalid_request",
-                        error_description = "Present VP is invalid"
-                    });
-                }
-
-            }
-            catch (Exception e)
-            {
-                return BadRequest(new
-                {
-                    error = "invalid_request",
-                    error_description = "Present VP is invalid"
-                });
-            }
-
-            string baseUrl = null;
-            try
-            {
-
-                //string url = vpServ.CheckHttps(HttpContext.Request.GetDisplayUrl());
-
-                string url = HttpContext.Request.IsHttps ? "https://" : "http://";
-                var externalBase = Environment.GetEnvironmentVariable("BASE_URL") ?? $"{url}{Request.Host}";
-                baseUrl = $"{externalBase}/PresentResult/Result/{state}";
-
-
-                //save to result to db
-                VerifierDbContext context = new VerifierDbContext();
-                Dbverifierresponse dbresult = new Dbverifierresponse();
-
-                //dbresult.Id = vpServ.GetGUID();
-                dbresult.SessionId = state;
-                dbresult.VpToken = vp_payload;
-                dbresult.VcPayload = vctoken;
-                dbresult.PresentationSubmission = null;
-                dbresult.ResponseCode = "200";
-                dbresult.ReceivedAt = DateTime.UtcNow;
-
-                var oldResult = context.Dbverifierresponses.Where(i => i.SessionId == state).FirstOrDefault();
-                if (oldResult != null)
-                {
-                    //update
-                    //oldResult.SessionId = stateid;
-                    oldResult.VpToken = vp_payload;
-                    oldResult.VcPayload = vc_token;
-                }
-                else
-                {
-                    //new
-                    context.Dbverifierresponses.Add(dbresult);
-                }
-
-                context.SaveChanges();
-            }
-            catch (Exception e)
-            {
-                return BadRequest(new
-                {
-                    error = "invalid_request",
-                    error_description = "Present VP is invalid"
-                });
-            }
-
-
-            //logs.Add(JsonSerializer.Serialize("Present VP Success", new JsonSerializerOptions { WriteIndented = true }));
-            // return Content(baseUrl);
-            return Ok(new
-            {
-                redirect_uri = baseUrl
-            });
-
-        } */
+        // FIX (M-08, 2026-08-09): removed VerifierVP_old, a fully commented-out
+        // (non-compiled) earlier version of VerifierVP, superseded by the active
+        // implementation above. See OID4VP-1.0-COMPLIANCE-AUDIT.md finding M-08.
     }
  
 }

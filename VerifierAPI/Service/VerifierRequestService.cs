@@ -31,6 +31,28 @@ public class VerifierRequestService
             return new ScanResponse { Success = false, Error = "invalid_qr_content" };
         }
 
+        // FIX (H-10, 2026-08-09): only the host name was checked before — scheme,
+        // port, and embedded userinfo were unconstrained, so http://, non-default
+        // ports, and userinfo-smuggled URLs (https://allowed-host@evil/..., where
+        // some parsers/humans misread the real target) all passed. OpenID4VP
+        // requires current TLS best practices (§14.6).
+        // See OID4VP-1.0-COMPLIANCE-AUDIT.md finding H-10.
+        if (!string.Equals(brokerUri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+        {
+            _logger.LogWarning("QR ชี้ไปที่ URL ที่ไม่ใช่ HTTPS: {Value}", scannedValue);
+            return new ScanResponse { Success = false, Error = "untrusted_broker_endpoint" };
+        }
+        if (!string.IsNullOrEmpty(brokerUri.UserInfo))
+        {
+            _logger.LogWarning("QR URL มี userinfo ฝังอยู่ ปฏิเสธ: {Value}", scannedValue);
+            return new ScanResponse { Success = false, Error = "untrusted_broker_endpoint" };
+        }
+        if (brokerUri.Port != 443)
+        {
+            _logger.LogWarning("QR ชี้ไปที่ port ที่ไม่ใช่ HTTPS default (443): {Value}", scannedValue);
+            return new ScanResponse { Success = false, Error = "untrusted_broker_endpoint" };
+        }
+
         // 2. เช็ค allowlist กัน SSRF
         if (!_allowedBrokerHosts.Contains(brokerUri.Host))
         {
@@ -63,6 +85,17 @@ public class VerifierRequestService
         {
             var brokerPayload = new { request_uri = openId4VpUri };
             var response = await _httpClient.PostAsJsonAsync(scannedValue, brokerPayload);
+
+            // FIX (H-10, 2026-08-09): reject unexpectedly large broker responses
+            // rather than buffering an unbounded amount of attacker-controlled data.
+            // Only guards responses that declare Content-Length; a broker that omits
+            // it or streams chunked is still bounded by the client Timeout above.
+            const long maxResponseBytes = 1_048_576; // 1 MB
+            if (response.Content.Headers.ContentLength is long contentLength && contentLength > maxResponseBytes)
+            {
+                _logger.LogWarning("Broker ตอบกลับข้อมูลใหญ่เกินกำหนด: {Length} bytes", contentLength);
+                return new ScanResponse { Success = false, Error = "broker_response_too_large" };
+            }
 
             if (!response.IsSuccessStatusCode)
             {

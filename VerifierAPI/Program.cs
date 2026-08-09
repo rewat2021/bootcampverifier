@@ -83,7 +83,19 @@ builder.Host.UseNLog();
 
 
 // HttpClient สำหรับยิงไปที่ Broker
-builder.Services.AddHttpClient<VerifierAPI.Services.VerifierRequestService>();
+// FIX (H-10, 2026-08-09): a short timeout so a slow/hanging broker can't tie up a
+// request indefinitely, and AllowAutoRedirect = false so a broker response
+// redirecting elsewhere can't silently escape the allowlist check already
+// performed on the originally scanned URL (see VerifierRequestService.cs).
+// See OID4VP-1.0-COMPLIANCE-AUDIT.md finding H-10.
+builder.Services.AddHttpClient<VerifierAPI.Services.VerifierRequestService>(client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(10);
+})
+.ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+{
+    AllowAutoRedirect = false
+});
 
 // Register service หลัก
 builder.Services.AddScoped<VerifierAPI.Services.VerifierRequestService>();

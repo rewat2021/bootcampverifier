@@ -31,6 +31,11 @@ namespace VerifierAPI.Service
         public string proof { get; set; }
         public string publicKey { get; set; }
         public string didkey { get; set; }
+        // FIX (Phase 1 item 6 / H-06, 2026-08-09): the base DID (fragment stripped)
+        // used for the resolver HTTP call. `kidFull` preserves the exact `kid`
+        // (including the "#..." fragment) so the correct verificationMethod can be
+        // selected out of a DID document that lists more than one key.
+        public string kidFull { get; set; }
         public string vptoken { get; set; }
         public string vctoken { get; set; }
 
@@ -131,7 +136,7 @@ namespace VerifierAPI.Service
             return result;
         }
 
-        public async Task<string> ResolveDID(string key)
+        public async Task<string> ResolveDID(string key, string exactKid = null)
         {
             string publickey = null;
             try
@@ -150,14 +155,54 @@ namespace VerifierAPI.Service
                 JsonDocument document = JsonDocument.Parse(jsonResponse);
                 JsonElement root = document.RootElement;
 
+                // FIX (Phase 1 item 6 / H-06, 2026-08-09): previously this loop kept
+                // overwriting `publickey` with whichever verificationMethod happened to
+                // be listed last in the DID document, ignoring the exact `kid` the JWS
+                // header asked for. Now it prefers the entry whose `id` matches the
+                // requested kid (handling both absolute "did:...#frag" and relative
+                // "#frag" id styles). If no exactKid is supplied, or none matches, it
+                // falls back to the previous "last one" behavior so existing DID
+                // documents with a single key keep working unchanged.
+                // See OID4VP-1.0-COMPLIANCE-AUDIT.md Phase 1 item 6 / H-06.
+                JsonElement? matched = null;
+                JsonElement? lastSeen = null;
                 foreach (JsonElement method in root.GetProperty("verificationMethod").EnumerateArray())
                 {
-                    // Extracting "publicKeyJwk" object inside "verificationMethod"
-                    JsonElement publicKeyJwk = method.GetProperty("publicKeyJwk");
-                    publickey = publicKeyJwk.GetProperty("x").GetString();
+                    lastSeen = method;
+                    if (!string.IsNullOrEmpty(exactKid) && method.TryGetProperty("id", out var idEl))
+                    {
+                        string vmId = idEl.GetString() ?? "";
+                        if (string.Equals(vmId, exactKid, StringComparison.Ordinal) ||
+                            (vmId.StartsWith("#") && exactKid.EndsWith(vmId, StringComparison.Ordinal)) ||
+                            (exactKid.StartsWith("#") && vmId.EndsWith(exactKid, StringComparison.Ordinal)))
+                        {
+                            matched = method;
+                        }
+                    }
                 }
 
+                JsonElement? chosen = matched ?? lastSeen;
+                if (chosen != null)
+                {
+                    JsonElement publicKeyJwk = chosen.Value.GetProperty("publicKeyJwk");
+                    string crv = publicKeyJwk.TryGetProperty("crv", out var crvEl) ? crvEl.GetString() : null;
+                    string x = publicKeyJwk.TryGetProperty("x", out var xEl) ? xEl.GetString() : null;
 
+                    // FIX (Phase 1 item 6 / H-05, 2026-08-09): ES256 (P-256) keys need
+                    // both x and y coordinates to verify; Ed25519 keys only need x.
+                    // Package P-256 material as a small JSON blob so VerifyJWS can tell
+                    // them apart, while Ed25519 keeps returning the raw x string exactly
+                    // as before (no behavior change for the currently-working format).
+                    if (string.Equals(crv, "P-256", StringComparison.OrdinalIgnoreCase))
+                    {
+                        string y = publicKeyJwk.TryGetProperty("y", out var yEl) ? yEl.GetString() : null;
+                        publickey = JsonConvert.SerializeObject(new { crv = "P-256", x, y });
+                    }
+                    else
+                    {
+                        publickey = x;
+                    }
+                }
             }
             catch (Exception e)
             {
@@ -220,12 +265,13 @@ namespace VerifierAPI.Service
                 result.header = parts[0];
                 result.payload = parts[1];
                 result.proof = parts[2];
-                result.didkey = kid; 
+                result.didkey = kid;
+                result.kidFull = kid; // full kid incl. fragment, for exact verificationMethod selection
                 if (kid.IndexOf('#') > 0)
                 {
                     result.didkey = kid.Split('#')[0];
                 }
-                
+
 
 
             }
@@ -241,14 +287,32 @@ namespace VerifierAPI.Service
 
 
 
-        public bool VerifyJWS(string jws, string publicKey, out string ErrMsg)
+        private class Es256KeyMaterial
+        {
+            public string crv { get; set; }
+            public string x { get; set; }
+            public string y { get; set; }
+        }
+
+        // FIX (Phase 1 item 6, 2026-08-09): dispatches by the JWS header's declared
+        // `alg` and the shape of `publicKey`:
+        //   - Ed25519 (alg "EdDSA"/"Ed25519"): `publicKey` is the raw base64url JWK
+        //     `x` value, exactly as before — this path is unchanged so the format
+        //     that already works in production keeps working identically.
+        //   - ES256 (alg "ES256"): `publicKey` is a small JSON blob
+        //     {"crv":"P-256","x":...,"y":...} produced by ResolveDID. Previously
+        //     ES256 credentials could never verify at all (H-05) even though
+        //     AlgValues configures ES256 for some document types.
+        // `permittedAlgs`, when supplied, rejects any signature whose header `alg`
+        // isn't in the caller's allow-list (e.g. this document type's configured
+        // AlgValues), instead of accepting whatever algorithm the token happens to
+        // use. Left null at call sites that don't yet have that context, which
+        // preserves prior behavior there.
+        // See OID4VP-1.0-COMPLIANCE-AUDIT.md Phase 1 item 6 / H-05 / H-06.
+        public bool VerifyJWS(string jws, string publicKey, out string ErrMsg, string[] permittedAlgs = null)
         {
             ErrMsg = null;
             bool isValid = false;
-            string jws_text = jws;
-
-            //string base64 = publicKey;
-            byte[] base64Encode = Base64UrlDecode(publicKey);
 
             var parts = jws.Split('.');
             if (parts.Length != 3)
@@ -265,13 +329,60 @@ namespace VerifierAPI.Service
                 jwsModel.payload = parts[1];
                 jwsModel.proof = parts[2];
 
+                string headerJson = Base64UrlDecodeToString(parts[0]);
+                using JsonDocument headerDoc = JsonDocument.Parse(headerJson);
+                string alg = headerDoc.RootElement.TryGetProperty("alg", out var algEl) ? algEl.GetString() : null;
+
+                if (permittedAlgs != null && permittedAlgs.Length > 0 &&
+                    !permittedAlgs.Any(a => string.Equals(a, alg, StringComparison.OrdinalIgnoreCase)))
+                {
+                    ErrMsg = $"alg '{alg}' is not in the permitted algorithm list for this credential type";
+                    return false;
+                }
+
                 // Reconstruct the signed data (Header + '.' + Payload)
                 byte[] signedData = System.Text.Encoding.UTF8.GetBytes(parts[0] + "." + parts[1]);
 
-                // Create the Ed25519 public key from the provided Base64-encoded string
-                var key = PublicKey.Import(SignatureAlgorithm.Ed25519, base64Encode, KeyBlobFormat.RawPublicKey);
+                bool looksLikeEs256Blob = !string.IsNullOrWhiteSpace(publicKey) && publicKey.TrimStart().StartsWith("{");
 
-                // Verify the signature
+                if (string.Equals(alg, "ES256", StringComparison.OrdinalIgnoreCase) || looksLikeEs256Blob)
+                {
+                    if (!looksLikeEs256Blob)
+                    {
+                        ErrMsg = "alg is ES256 but no P-256 key material was resolved";
+                        return false;
+                    }
+
+                    var keyMaterial = JsonConvert.DeserializeObject<Es256KeyMaterial>(publicKey);
+                    if (keyMaterial == null || string.IsNullOrEmpty(keyMaterial.x) || string.IsNullOrEmpty(keyMaterial.y))
+                    {
+                        ErrMsg = "Incomplete ES256 (P-256) key material";
+                        return false;
+                    }
+
+                    var ecParams = new ECParameters
+                    {
+                        Curve = ECCurve.NamedCurves.nistP256,
+                        Q = new ECPoint
+                        {
+                            X = Base64UrlDecode(keyMaterial.x),
+                            Y = Base64UrlDecode(keyMaterial.y)
+                        }
+                    };
+                    using var ecdsa = ECDsa.Create(ecParams);
+                    // JOSE ES256 signatures are the raw r||s (64-byte) IEEE P1363 format,
+                    // not ASN.1 DER, and are always signed over SHA-256.
+                    isValid = ecdsa.VerifyData(signedData, signature, HashAlgorithmName.SHA256, DSASignatureFormat.IeeeP1363FixedFieldConcatenation);
+                    if (!isValid)
+                    {
+                        ErrMsg = "vp_token is invalid";
+                    }
+                    return isValid;
+                }
+
+                // Ed25519 path — identical to the previous (only) implementation.
+                byte[] base64Encode = Base64UrlDecode(publicKey);
+                var key = PublicKey.Import(SignatureAlgorithm.Ed25519, base64Encode, KeyBlobFormat.RawPublicKey);
                 isValid = SignatureAlgorithm.Ed25519.Verify(key, signedData, signature);
                 if (!isValid)
                 {
@@ -805,6 +916,413 @@ namespace VerifierAPI.Service
                 catch { }
             }
             return result;
+        }
+
+        public class SdJwtVerificationResult
+        {
+            public bool IsValid { get; set; }
+            public string ErrorCode { get; set; }
+            public string ErrorMessage { get; set; }
+            public Dictionary<string, object> VerifiedClaims { get; set; } = new Dictionary<string, object>();
+        }
+
+        // SECURITY (C-04 remediation, 2026-08-08): full SD-JWT VC presentation
+        // verification. Validates, in order: issuer signature, every disclosed
+        // claim's digest against the signed `_sd` claim(s), the KB-JWT signature
+        // against the holder key declared in `cnf`, `sd_hash` binding the KB-JWT to
+        // the exact disclosure set presented, and the KB-JWT `nonce`/`aud`/`iat`.
+        // Only claims whose digest was verified are ever returned. Do not surface
+        // decoded disclosure values anywhere without going through this method.
+        // See OID4VP-1.0-COMPLIANCE-AUDIT.md finding C-04 / Appendix B.3.6.
+        public SdJwtVerificationResult VerifySDJWTPresentation(
+            string sdJwtPresentation,
+            string issuerPublicKey,
+            string expectedNonce,
+            string expectedAudience,
+            string[] permittedIssuerAlgs = null)
+        {
+            var result = new SdJwtVerificationResult();
+            try
+            {
+                if (string.IsNullOrWhiteSpace(sdJwtPresentation))
+                {
+                    result.ErrorCode = "malformed_sd_jwt";
+                    return result;
+                }
+
+                bool endsWithTilde = sdJwtPresentation.EndsWith("~");
+                var segments = sdJwtPresentation.Split('~');
+                if (segments.Length < 1 || string.IsNullOrEmpty(segments[0]))
+                {
+                    result.ErrorCode = "malformed_sd_jwt";
+                    return result;
+                }
+
+                string issuerJwt = segments[0];
+                string kbJwt = null;
+                var disclosureParts = new List<string>();
+
+                for (int i = 1; i < segments.Length; i++)
+                {
+                    if (string.IsNullOrEmpty(segments[i])) continue;
+                    bool isLastSegment = i == segments.Length - 1;
+                    if (isLastSegment && !endsWithTilde && segments[i].Split('.').Length == 3)
+                        kbJwt = segments[i];
+                    else
+                        disclosureParts.Add(segments[i]);
+                }
+
+                // 1. Issuer signature over the issuer-signed JWT. permittedIssuerAlgs
+                // (Phase 1 item 6 / H-05) is only applied here, not to the KB-JWT
+                // below — the holder's Key Binding key algorithm is a separate axis
+                // from the credential issuance format's configured AlgValues.
+                if (!VerifyJWS(issuerJwt, issuerPublicKey, out string issuerErr, permittedIssuerAlgs))
+                {
+                    result.ErrorCode = "invalid_issuer_signature";
+                    result.ErrorMessage = issuerErr;
+                    return result;
+                }
+
+                var issuerJwtParts = issuerJwt.Split('.');
+                if (issuerJwtParts.Length != 3)
+                {
+                    result.ErrorCode = "malformed_sd_jwt";
+                    return result;
+                }
+                string payloadJson = Base64UrlDecodeToString(issuerJwtParts[1]);
+                using var payloadDoc = JsonDocument.Parse(payloadJson);
+                JsonElement root = payloadDoc.RootElement;
+
+                // 1b. Credential time validity (Phase 1 item 8 / H-04) — reject a
+                // credential that is expired or not yet valid per its own nbf/exp.
+                long? credNbf = root.TryGetProperty("nbf", out var nbfEl) && nbfEl.TryGetInt64(out long nbfVal) ? nbfVal : (long?)null;
+                long? credExp = root.TryGetProperty("exp", out var expEl) && expEl.TryGetInt64(out long expVal) ? expVal : (long?)null;
+                if (!IsCredentialTimeValid(credNbf, credExp, out string timeErr))
+                {
+                    result.ErrorCode = timeErr;
+                    result.ErrorMessage = "Credential is expired or not yet valid";
+                    return result;
+                }
+
+                // 2. Holder confirmation key is required — this deployment does not
+                // accept SD-JWT VCs that cannot prove holder binding.
+                if (!root.TryGetProperty("cnf", out var cnfElement) ||
+                    !cnfElement.TryGetProperty("jwk", out var jwkElement) ||
+                    !jwkElement.TryGetProperty("x", out var xElement) ||
+                    string.IsNullOrEmpty(xElement.GetString()))
+                {
+                    result.ErrorCode = "missing_holder_binding_key";
+                    result.ErrorMessage = "Credential has no usable cnf.jwk.x (only Ed25519/OKP holder keys are supported)";
+                    return result;
+                }
+                string holderPublicKey = xElement.GetString();
+
+                // 3. Every disclosed claim's digest must be present in the signed _sd
+                string sdAlg = root.TryGetProperty("_sd_alg", out var algEl) && !string.IsNullOrEmpty(algEl.GetString())
+                    ? algEl.GetString()
+                    : "sha-256";
+
+                var validDigests = new HashSet<string>(StringComparer.Ordinal);
+                CollectSdDigests(root, validDigests);
+
+                var verifiedClaims = new Dictionary<string, object>();
+                foreach (var disclosure in disclosureParts)
+                {
+                    string digest = ComputeHashBase64Url(disclosure, sdAlg);
+                    if (!validDigests.Contains(digest))
+                    {
+                        result.ErrorCode = "disclosure_digest_mismatch";
+                        result.ErrorMessage = "A disclosed claim was not found in the signed credential's _sd digests";
+                        return result;
+                    }
+
+                    string disclosureJson = Base64UrlDecodeToString(disclosure);
+                    var arr = JsonConvert.DeserializeObject<List<object>>(disclosureJson);
+                    if (arr != null && arr.Count == 3)
+                    {
+                        // [salt, claimName, claimValue] — object-property disclosure
+                        verifiedClaims[arr[1].ToString()] = arr[2];
+                    }
+                    // 2-element disclosures ([salt, value], used for array elements) are
+                    // digest-verified above but not surfaced as top-level claims here.
+                }
+
+                // 4. KB-JWT is required once a holder key is declared
+                if (string.IsNullOrEmpty(kbJwt))
+                {
+                    result.ErrorCode = "missing_kb_jwt";
+                    result.ErrorMessage = "Key Binding JWT is required but was not present";
+                    return result;
+                }
+
+                if (!VerifyJWS(kbJwt, holderPublicKey, out string kbErr))
+                {
+                    result.ErrorCode = "invalid_kb_jwt_signature";
+                    result.ErrorMessage = kbErr;
+                    return result;
+                }
+
+                var kbParts = kbJwt.Split('.');
+                if (kbParts.Length != 3)
+                {
+                    result.ErrorCode = "malformed_kb_jwt";
+                    return result;
+                }
+                string kbPayloadJson = Base64UrlDecodeToString(kbParts[1]);
+                using var kbDoc = JsonDocument.Parse(kbPayloadJson);
+                JsonElement kbRoot = kbDoc.RootElement;
+
+                // 5. sd_hash — binds the KB-JWT to exactly this issuer-JWT + disclosure set
+                string signedPart = issuerJwt + "~";
+                foreach (var d in disclosureParts) signedPart += d + "~";
+                string computedSdHash = ComputeHashBase64Url(signedPart, sdAlg);
+                string claimedSdHash = kbRoot.TryGetProperty("sd_hash", out var sdHashEl) ? sdHashEl.GetString() : null;
+                if (string.IsNullOrEmpty(claimedSdHash) ||
+                    !CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(claimedSdHash), Encoding.UTF8.GetBytes(computedSdHash)))
+                {
+                    result.ErrorCode = "sd_hash_mismatch";
+                    result.ErrorMessage = "KB-JWT sd_hash does not match the presented issuer-JWT + disclosure set";
+                    return result;
+                }
+
+                // 6. nonce — must match the nonce issued for this session (replay protection)
+                string kbNonce = kbRoot.TryGetProperty("nonce", out var nonceEl) ? nonceEl.GetString() : null;
+                if (string.IsNullOrEmpty(expectedNonce) || !string.Equals(kbNonce, expectedNonce, StringComparison.Ordinal))
+                {
+                    result.ErrorCode = "nonce_mismatch";
+                    result.ErrorMessage = "KB-JWT nonce does not match the session nonce";
+                    return result;
+                }
+
+                // 7. aud — must match this Verifier's exact client_id
+                string kbAud = kbRoot.TryGetProperty("aud", out var audEl) ? audEl.GetString() : null;
+                if (string.IsNullOrEmpty(expectedAudience) || !string.Equals(kbAud, expectedAudience, StringComparison.Ordinal))
+                {
+                    result.ErrorCode = "audience_mismatch";
+                    result.ErrorMessage = "KB-JWT aud does not match this Verifier's client_id";
+                    return result;
+                }
+
+                // 8. iat freshness — reject stale Key Binding JWTs
+                if (!kbRoot.TryGetProperty("iat", out var iatEl) || !iatEl.TryGetInt64(out long kbIat))
+                {
+                    result.ErrorCode = "missing_kb_jwt_iat";
+                    return result;
+                }
+                long nowUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+                const long maxSkewSeconds = 300; // 5 minutes
+                if (Math.Abs(nowUnix - kbIat) > maxSkewSeconds)
+                {
+                    result.ErrorCode = "kb_jwt_not_fresh";
+                    result.ErrorMessage = "Key Binding JWT iat is too old or in the future";
+                    return result;
+                }
+
+                result.IsValid = true;
+                result.VerifiedClaims = verifiedClaims;
+                return result;
+            }
+            catch (Exception e)
+            {
+                result.ErrorCode = "sd_jwt_verification_error";
+                result.ErrorMessage = e.Message;
+                return result;
+            }
+        }
+
+        // Recursively collect every digest listed in any "_sd" array anywhere in the
+        // credential payload (top-level and nested objects/arrays), per SD-JWT's
+        // selective disclosure structure.
+        private void CollectSdDigests(JsonElement element, HashSet<string> digests)
+        {
+            if (element.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var prop in element.EnumerateObject())
+                {
+                    if (prop.NameEquals("_sd") && prop.Value.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var d in prop.Value.EnumerateArray())
+                        {
+                            if (d.ValueKind == JsonValueKind.String)
+                                digests.Add(d.GetString());
+                        }
+                    }
+                    else
+                    {
+                        CollectSdDigests(prop.Value, digests);
+                    }
+                }
+            }
+            else if (element.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var item in element.EnumerateArray())
+                {
+                    CollectSdDigests(item, digests);
+                }
+            }
+        }
+
+        // digest = base64url( hash( ASCII(base64url-encoded-input) ) ), per the
+        // SD-JWT disclosure digest / sd_hash calculation rules.
+        private string ComputeHashBase64Url(string asciiInput, string alg)
+        {
+            byte[] inputBytes = Encoding.ASCII.GetBytes(asciiInput);
+            byte[] hash = alg?.ToLowerInvariant() switch
+            {
+                "sha-256" or "sha256" => SHA256.HashData(inputBytes),
+                "sha-384" or "sha384" => SHA384.HashData(inputBytes),
+                "sha-512" or "sha512" => SHA512.HashData(inputBytes),
+                _ => throw new NotSupportedException($"Unsupported _sd_alg: {alg}")
+            };
+            return WebEncoders.Base64UrlEncode(hash);
+        }
+
+        // FIX (Phase 1 item 7 / C-02, 2026-08-09): the jwt_vc_json presentation path
+        // never checked that the outer VP-JWT's own `nonce`/`aud` claims matched this
+        // session — only the SD-JWT path's KB-JWT got that check. Without this, a
+        // presentation JWT signed for a different session/verifier could be replayed
+        // here as long as its own signature was valid.
+        // See OID4VP-1.0-COMPLIANCE-AUDIT.md Phase 1 item 7 / C-02.
+        public bool ValidateVpNonceAndAudience(string base64UrlPayload, string expectedNonce, string expectedAudience, out string errorCode)
+        {
+            errorCode = null;
+            try
+            {
+                string payloadJson = Base64UrlDecodeToString(base64UrlPayload);
+                using JsonDocument doc = JsonDocument.Parse(payloadJson);
+                JsonElement root = doc.RootElement;
+
+                string nonce = root.TryGetProperty("nonce", out var nonceEl) ? nonceEl.GetString() : null;
+                if (string.IsNullOrEmpty(expectedNonce) || !string.Equals(nonce, expectedNonce, StringComparison.Ordinal))
+                {
+                    errorCode = "nonce_mismatch";
+                    return false;
+                }
+
+                bool audMatches = false;
+                if (root.TryGetProperty("aud", out var audEl))
+                {
+                    if (audEl.ValueKind == JsonValueKind.String)
+                    {
+                        audMatches = string.Equals(audEl.GetString(), expectedAudience, StringComparison.Ordinal);
+                    }
+                    else if (audEl.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var item in audEl.EnumerateArray())
+                        {
+                            if (item.ValueKind == JsonValueKind.String &&
+                                string.Equals(item.GetString(), expectedAudience, StringComparison.Ordinal))
+                            {
+                                audMatches = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+                if (string.IsNullOrEmpty(expectedAudience) || !audMatches)
+                {
+                    errorCode = "audience_mismatch";
+                    return false;
+                }
+
+                return true;
+            }
+            catch (Exception)
+            {
+                errorCode = "malformed_vp_payload";
+                return false;
+            }
+        }
+
+        // FIX (Phase 1 item 8 / H-04, 2026-08-09): checks that the credential actually
+        // returned matches what this session's DCQL query asked for (format +
+        // type/vct), instead of accepting whatever the Wallet sent back and only
+        // using it to pick a display route. Fails open (returns true) when there is
+        // no stored query to check against, so sessions created before this column
+        // existed don't start failing.
+        // See OID4VP-1.0-COMPLIANCE-AUDIT.md Phase 1 item 8 / H-04.
+        public bool ValidateAgainstDcqlQuery(string dcqlQueryJson, string actualFormat, string actualTypeOrVct, out string errorCode)
+        {
+            errorCode = null;
+            if (string.IsNullOrWhiteSpace(dcqlQueryJson))
+            {
+                return true;
+            }
+            try
+            {
+                using JsonDocument doc = JsonDocument.Parse(dcqlQueryJson);
+                if (!doc.RootElement.TryGetProperty("credentials", out var credentials) || credentials.GetArrayLength() == 0)
+                {
+                    errorCode = "dcql_query_empty";
+                    return false;
+                }
+                // JsonElement has no int indexer (unlike Newtonsoft's JToken) — use
+                // EnumerateArray() instead of `credentials[0]`.
+                var cred = credentials.EnumerateArray().First();
+                string expectedFormat = cred.TryGetProperty("format", out var fmtEl) ? fmtEl.GetString() : null;
+                if (!string.IsNullOrEmpty(expectedFormat) && !string.Equals(expectedFormat, actualFormat, StringComparison.OrdinalIgnoreCase))
+                {
+                    errorCode = "unexpected_credential_format";
+                    return false;
+                }
+
+                if (cred.TryGetProperty("meta", out var meta))
+                {
+                    string[] expectedValues = null;
+                    if (meta.TryGetProperty("type_values", out var typeValuesEl) && typeValuesEl.ValueKind == JsonValueKind.Array)
+                    {
+                        expectedValues = typeValuesEl.EnumerateArray()
+                            .Select(v => v.ValueKind == JsonValueKind.String ? v.GetString() : null)
+                            .Where(v => v != null).ToArray();
+                    }
+                    else if (meta.TryGetProperty("vct_values", out var vctValuesEl) && vctValuesEl.ValueKind == JsonValueKind.Array)
+                    {
+                        expectedValues = vctValuesEl.EnumerateArray()
+                            .Select(v => v.ValueKind == JsonValueKind.String ? v.GetString() : null)
+                            .Where(v => v != null).ToArray();
+                    }
+
+                    if (expectedValues != null && expectedValues.Length > 0)
+                    {
+                        bool matches = !string.IsNullOrEmpty(actualTypeOrVct) &&
+                            expectedValues.Any(v => string.Equals(v, actualTypeOrVct, StringComparison.Ordinal));
+                        if (!matches)
+                        {
+                            errorCode = "unexpected_credential_type";
+                            return false;
+                        }
+                    }
+                }
+
+                return true;
+            }
+            catch (Exception)
+            {
+                errorCode = "malformed_dcql_query";
+                return false;
+            }
+        }
+
+        // FIX (Phase 1 item 8 / H-04, 2026-08-09): rejects a credential whose own
+        // nbf/exp claims say it is not currently valid. Missing claims are treated as
+        // "no constraint" rather than a failure, since not every issuer sets both.
+        // See OID4VP-1.0-COMPLIANCE-AUDIT.md Phase 1 item 8 / H-04.
+        public bool IsCredentialTimeValid(long? nbf, long? exp, out string errorCode)
+        {
+            errorCode = null;
+            long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            const long skewSeconds = 60;
+            if (exp.HasValue && now > exp.Value + skewSeconds)
+            {
+                errorCode = "credential_expired";
+                return false;
+            }
+            if (nbf.HasValue && now < nbf.Value - skewSeconds)
+            {
+                errorCode = "credential_not_yet_valid";
+                return false;
+            }
+            return true;
         }
 
         public string GetVctFromSdJwt(string vpToken)

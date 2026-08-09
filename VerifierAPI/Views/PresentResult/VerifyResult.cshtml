@@ -607,6 +607,32 @@
         // ไม่แม่นยำ 100% (เช่น iPad ที่รายงานตัวเองเป็น desktop) แต่ user ไม่ต้องเลือกเอง
         const isMobileOrTablet = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 
+        // ---------- poll /verifier/status/{sessionId} จนกว่าจะได้ผลที่ไม่ใช่ pending ----------
+        // (รูปแบบเดียวกับ VerifyScanQR.cshtml — เดิมหน้านี้ขอ QR/deeplink มาแสดงแล้วจบเลย
+        // ไม่เคยเช็คผลตรวจสอบต่อ ทำให้ต่อให้ Wallet ตรวจผ่านจริง หน้าก็ไม่พาไปไหนต่อ)
+        const POLL_INTERVAL_MS = 2500;
+        const POLL_TIMEOUT_MS = 120000; // ยอมรอ wallet ได้สูงสุด 2 นาที ก่อน timeout
+
+        function wait(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+        async function pollForResult(sessionId) {
+            const startedAt = Date.now();
+            while (Date.now() - startedAt < POLL_TIMEOUT_MS) {
+                await wait(POLL_INTERVAL_MS);
+                try {
+                    const resp = await fetch('/verifier/status/' + encodeURIComponent(sessionId));
+                    if (!resp.ok) continue; // error ชั่วคราว ลองรอบถัดไป ไม่ล้มทันที
+                    const data = await resp.json();
+                    if (data.status === 'completed') return { ok: true, claims: data.claims || {} };
+                    if (data.status === 'failed') return { ok: false, error: data.error || 'verification_failed' };
+                    // status === 'pending' → วนต่อ
+                } catch (err) {
+                    console.error('[verifier/status] poll error:', err);
+                }
+            }
+            return { ok: false, error: 'timeout' };
+        }
+
         async function loadPresentationRequest() {
             const qrFrame = document.getElementById("qrFrame");
             const qrImg = document.getElementById("qr");
@@ -615,6 +641,8 @@
             const statusText = document.getElementById("statusText");
 
             document.getElementById(isMobileOrTablet ? "deeplinkView" : "qrView").style.display = "block";
+
+            let sessionId = null;
 
             try {
                 const res = await fetch('/generate-vp-qr', {
@@ -640,13 +668,34 @@
                     qrImg.onload = function () { qrFrame.classList.add("is-loaded"); };
                 }
 
+                if (!data.state) throw new Error("Response missing state");
+                sessionId = data.state;
+
                 statusText.textContent = "รอการตอบกลับจาก Wallet App...";
                 statusPill.classList.remove("is-error");
             } catch (err) {
                 console.error("โหลดคำร้องไม่สำเร็จ:", err);
                 statusText.textContent = "โหลดคำร้องไม่สำเร็จ ลองใหม่อีกครั้ง";
                 statusPill.classList.add("is-error");
+                return;
             }
+
+            // ---------- รอผลตรวจสอบจาก Wallet แล้วค่อยไหลต่อ ----------
+            const pollResult = await pollForResult(sessionId);
+
+            if (!pollResult.ok) {
+                statusText.textContent = pollResult.error === 'timeout'
+                    ? "หมดเวลารอ Wallet App โปรดลองใหม่อีกครั้ง"
+                    : "ตรวจสอบไม่ผ่าน โปรดลองใหม่อีกครั้ง";
+                statusPill.classList.add("is-error");
+                return;
+            }
+
+            // ตรวจสอบผ่าน — พาไปหน้าแสดงผล (ปลายทางเดียวกับ redirect_uri ที่ backend
+            // คำนวณไว้ใน VerifierVP: /PresentResult/Result/{state})
+            statusText.textContent = "ตรวจสอบสำเร็จ กำลังนำท่านไปหน้าถัดไป...";
+            statusPill.classList.remove("is-error");
+            window.location.href = '/PresentResult/Result/' + encodeURIComponent(sessionId);
         }
 
         document.addEventListener("DOMContentLoaded", function () {

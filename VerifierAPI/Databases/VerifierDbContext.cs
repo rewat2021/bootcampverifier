@@ -31,11 +31,8 @@ public partial class VerifierDbContext : DbContext
     public virtual DbSet<Usednonce> Usednonces { get; set; }
 
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
-    {
-        var connStr = Environment.GetEnvironmentVariable("CONNECTION_STRING")
-          ?? "server=192.100.10.48;port=3306;database=verifier;user=root;password=P@ssw0rd@1234;sslmode=None";
-        optionsBuilder.UseMySql(connStr, Microsoft.EntityFrameworkCore.ServerVersion.Parse("8.0.45-mysql"));
-    }
+#warning To protect potentially sensitive information in your connection string, you should move it out of source code. You can avoid scaffolding the connection string by using the Name= syntax to read it from configuration - see https://go.microsoft.com/fwlink/?linkid=2131148. For more guidance on storing connection strings, see https://go.microsoft.com/fwlink/?LinkId=723263.
+        => optionsBuilder.UseMySql("server=192.100.10.48;port=3306;database=verifier;user=root;password=P@ssw0rd@1234;sslmode=None", Microsoft.EntityFrameworkCore.ServerVersion.Parse("8.0.45-mysql"));
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -235,6 +232,7 @@ public partial class VerifierDbContext : DbContext
             entity.Property(e => e.ClientId).HasMaxLength(500);
             entity.Property(e => e.CompletedAt).HasColumnType("datetime");
             entity.Property(e => e.CreatedAt).HasColumnType("datetime");
+            entity.Property(e => e.DcqlQuery).HasColumnType("text");
             entity.Property(e => e.DocTypeId).HasMaxLength(256);
             entity.Property(e => e.ExpiresAt).HasColumnType("datetime");
             entity.Property(e => e.Nonce).HasMaxLength(500);

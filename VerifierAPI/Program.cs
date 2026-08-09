@@ -24,6 +24,22 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
         options.SlidingExpiration = true;
         options.Cookie.HttpOnly = true;
         options.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest; // ใช้ Always ถ้าบังคับ HTTPS
+
+        // SECURITY (H-08 remediation, 2026-08-09): VerifierScanController is now
+        // [Authorize]-protected but is called via fetch()/JS polling from
+        // VerifyScanQR.cshtml, not by a full-page navigation. Without this, an
+        // unauthenticated call would get a 302 redirect to the login page HTML
+        // instead of a clean 401, which the polling JS can't act on sensibly.
+        options.Events.OnRedirectToLogin = context =>
+        {
+            if (context.Request.Path.StartsWithSegments("/verifier"))
+            {
+                context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                return Task.CompletedTask;
+            }
+            context.Response.Redirect(context.RedirectUri);
+            return Task.CompletedTask;
+        };
     });
 
 builder.Services.AddControllersWithViews()

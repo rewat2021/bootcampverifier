@@ -1,7 +1,20 @@
 # export-lab-data.ps1 — Export MySQL data from running lab containers
 $ErrorActionPreference = "Stop"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$DbPass    = if ($env:MYSQL_ROOT_PASSWORD) { $env:MYSQL_ROOT_PASSWORD } else { "P@ssw0rd@1234" }
+# SECURITY (Phase 0 remediation, 2026-08-08): no hardcoded fallback password.
+# Read from verifier\.env (generated per-release by CI) or the environment.
+$DbPass = $env:MYSQL_ROOT_PASSWORD
+if (-not $DbPass) {
+    $EnvFile = Join-Path $ScriptDir "verifier\.env"
+    if (Test-Path $EnvFile) {
+        $Line = Get-Content $EnvFile | Where-Object { $_ -match '^MYSQL_ROOT_PASSWORD=' } | Select-Object -First 1
+        if ($Line) { $DbPass = $Line -replace '^MYSQL_ROOT_PASSWORD=', '' }
+    }
+}
+if (-not $DbPass) {
+    Write-Host "ERROR: MYSQL_ROOT_PASSWORD not set and not found in verifier\.env" -ForegroundColor Red
+    exit 1
+}
 $Timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
 $ExportDir = Join-Path $ScriptDir "lab-data-export"
 $OutFile   = Join-Path $ScriptDir "lab-data-${Timestamp}.zip"

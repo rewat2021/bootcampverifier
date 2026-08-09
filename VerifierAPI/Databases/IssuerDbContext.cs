@@ -30,9 +30,15 @@ public partial class IssuerDbContext : DbContext
 
     public virtual DbSet<Usednonce> Usednonces { get; set; }
 
+    // SECURITY (Phase 0 remediation, 2026-08-08): this used to hardcode a real host
+    // and password directly in source. Now reads CONNECTION_STRING from the
+    // environment, matching VerifierDbContext. Never commit credentials as a
+    // fallback value.
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
-#warning To protect potentially sensitive information in your connection string, you should move it out of source code. You can avoid scaffolding the connection string by using the Name= syntax to read it from configuration - see https://go.microsoft.com/fwlink/?linkid=2131148. For more guidance on storing connection strings, see https://go.microsoft.com/fwlink/?LinkId=723263.
-        => optionsBuilder.UseMySql("server=192.100.10.48;port=3306;database=verifier;user=root;password=P@ssw0rd@1234;sslmode=None", Microsoft.EntityFrameworkCore.ServerVersion.Parse("8.0.45-mysql"));
+        => optionsBuilder.UseMySql(
+            Environment.GetEnvironmentVariable("CONNECTION_STRING")
+              ?? throw new InvalidOperationException("CONNECTION_STRING environment variable is not set."),
+            Microsoft.EntityFrameworkCore.ServerVersion.Parse("8.0.45-mysql"));
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

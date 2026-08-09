@@ -15,6 +15,8 @@ public partial class Dbverifiersession
 
     public string? Nonce { get; set; }
 
+    public string? DcqlQuery { get; set; }
+
     public string? Status { get; set; }
 
     public DateTime CreatedAt { get; set; }

@@ -117,7 +117,16 @@ echo ""
 
 # ── ตรวจสอบ seed data ใน Verifier DB ────────────────────────────────────
 echo "[5/4] Verifying Verifier database seed data..."
-DB_PASS="${MYSQL_ROOT_PASSWORD:-P@ssw0rd@1234}"
+# SECURITY (Phase 0 remediation, 2026-08-08): no hardcoded fallback password.
+# Read from verifier/.env (generated per-release by CI) or the environment.
+DB_PASS="${MYSQL_ROOT_PASSWORD:-}"
+if [ -z "$DB_PASS" ] && [ -f "$SCRIPT_DIR/verifier/.env" ]; then
+  DB_PASS="$(grep -m1 '^MYSQL_ROOT_PASSWORD=' "$SCRIPT_DIR/verifier/.env" | cut -d= -f2-)"
+fi
+if [ -z "$DB_PASS" ]; then
+  echo "ERROR: MYSQL_ROOT_PASSWORD not set and not found in verifier/.env" >&2
+  exit 1
+fi
 MAX_DB_WAIT=60
 DB_WAITED=0
 until docker exec verifier-mysql mysqladmin ping -uroot -p"$DB_PASS" --silent 2>/dev/null; do

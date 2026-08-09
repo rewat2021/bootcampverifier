@@ -3,6 +3,7 @@ using System.Text;
 using VerifierAPI.Databases;
 using VerifierAPI.Models;
 using System.Security.Cryptography;
+using Microsoft.AspNetCore.WebUtilities;
 
 namespace VerifierAPI.Service
 {
@@ -22,8 +23,12 @@ namespace VerifierAPI.Service
 
                 // 2. สร้าง session ใหม่
                 Guid guid = Guid.NewGuid();
-                const string chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-                string nonce =  RandomNumberGenerator.GetString(chars, 6); // เช่น "K3X9B2"
+                // FIX (Phase 1 item 1, 2026-08-09): the old nonce was 6 chars from a
+                // 36-symbol alphabet (~31 bits) — far below the spec's 128-bit-or-greater
+                // requirement (§5) and small enough to be guessable/replayable. Now uses
+                // 256 bits of CSPRNG output, base64url-encoded (43 chars, no padding).
+                // See OID4VP-1.0-COMPLIANCE-AUDIT.md Phase 1 item 1.
+                string nonce = WebEncoders.Base64UrlEncode(RandomNumberGenerator.GetBytes(32));
                 var session = new Dbverifiersession
                 {
                     Id = guid.ToString(),

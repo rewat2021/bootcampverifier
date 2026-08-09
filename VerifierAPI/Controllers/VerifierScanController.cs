@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using VerifierAPI.Models;
 using VerifierAPI.Services;
@@ -7,6 +8,13 @@ using NLog;
 
 namespace VerifierAPI.Controllers;
 
+// SECURITY (H-08 remediation, 2026-08-09): both actions here are driven by the
+// verifier operator's own browser/terminal session (VerifyScanQR.cshtml scans a
+// physical QR then calls these — the Wallet never calls this controller directly,
+// it only ever talks to VerifierController's request/{id} and verify/{id}). Status
+// previously returned decoded claims for any session ID with no login requirement.
+// See OID4VP-1.0-COMPLIANCE-AUDIT.md finding H-08.
+[Authorize]
 [ApiController]
 [Route("verifier")]
 public class VerifierScanController : ControllerBase

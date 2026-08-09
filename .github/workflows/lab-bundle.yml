@@ -340,12 +340,17 @@ jobs:
           mkdir -p ${BUNDLE}/issuer/db
           mkdir -p ${BUNDLE}/waltid
 
+          # SECURITY (Phase 0 remediation, 2026-08-08): generate a fresh random
+          # MySQL root password for this release instead of committing a fixed
+          # password into every distributed lab bundle.
+          DB_PASSWORD="$(openssl rand -base64 24 | tr -d '=+/\n' | cut -c1-32)"
+
           # VerifierAPI
           cp docker-compose.lab.yml ${BUNDLE}/verifier/docker-compose.yml
           cp db/init.sql            ${BUNDLE}/verifier/db/init.sql
           printf '%s\n' \
-            'CONNECTION_STRING=server=verifier-mysql;port=3306;database=verifier;user=root;password=P@ssw0rd@1234;SslMode=None;AllowPublicKeyRetrieval=True' \
-            'MYSQL_ROOT_PASSWORD=P@ssw0rd@1234' \
+            "CONNECTION_STRING=server=verifier-mysql;port=3306;database=verifier;user=root;password=${DB_PASSWORD};SslMode=None;AllowPublicKeyRetrieval=True" \
+            "MYSQL_ROOT_PASSWORD=${DB_PASSWORD}" \
             'ASPNETCORE_ENVIRONMENT=Production' \
             'BASE_URL=http://localhost:5001' \
             'INTERNAL_BASE_URL=http://verifier-api:8080' \
@@ -353,12 +358,13 @@ jobs:
             'ISSUER_PUBLIC_URL=http://localhost:5002' \
             > ${BUNDLE}/verifier/.env
 
-          # IssuerAPI
+          # IssuerAPI (separate random password, not shared with verifier DB)
+          ISSUER_DB_PASSWORD="$(openssl rand -base64 24 | tr -d '=+/\n' | cut -c1-32)"
           cp _issuer/docker-compose.lab.yml ${BUNDLE}/issuer/docker-compose.yml
           cp _issuer/db/init.sql            ${BUNDLE}/issuer/db/init.sql
           printf '%s\n' \
-            'CONNECTION_STRING=server=issuer-mysql;port=3306;database=issuer;user=root;password=P@ssw0rd@1234;SslMode=None;AllowPublicKeyRetrieval=True' \
-            'MYSQL_ROOT_PASSWORD=P@ssw0rd@1234' \
+            "CONNECTION_STRING=server=issuer-mysql;port=3306;database=issuer;user=root;password=${ISSUER_DB_PASSWORD};SslMode=None;AllowPublicKeyRetrieval=True" \
+            "MYSQL_ROOT_PASSWORD=${ISSUER_DB_PASSWORD}" \
             'ASPNETCORE_ENVIRONMENT=Production' \
             'BASE_URL=http://localhost:5002' \
             'INTERNAL_BASE_URL=http://issuer-api:8080' \

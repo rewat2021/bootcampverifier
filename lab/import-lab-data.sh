@@ -3,7 +3,16 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-DB_PASS="${MYSQL_ROOT_PASSWORD:-P@ssw0rd@1234}"
+# SECURITY (Phase 0 remediation, 2026-08-08): no hardcoded fallback password.
+# Read from verifier/.env (generated per-release by CI) or the environment.
+DB_PASS="${MYSQL_ROOT_PASSWORD:-}"
+if [ -z "$DB_PASS" ] && [ -f "$SCRIPT_DIR/verifier/.env" ]; then
+  DB_PASS="$(grep -m1 '^MYSQL_ROOT_PASSWORD=' "$SCRIPT_DIR/verifier/.env" | cut -d= -f2-)"
+fi
+if [ -z "$DB_PASS" ]; then
+  echo "ERROR: MYSQL_ROOT_PASSWORD not set and not found in verifier/.env" >&2
+  exit 1
+fi
 
 echo "=== Import Lab Data ==="
 echo ""

@@ -373,12 +373,39 @@ namespace VerifierAPI.Controllers
 
             VCService vcServ = new VCService();
             DBService dbServ = new DBService();
-            
+
             var baseUrl = $"{Request.Scheme}://{Request.Host}";
-            string nonce = id;
             string stateid = id;
             Dbdocumenttype docType =  dbServ.GetRequestDocType(id);
+            if (docType == null)
+            {
+                return NotFound();
+            }
 
+            // FIX (C-03, 2026-08-08): this used to send `nonce = id` — the session
+            // ID itself — instead of the random nonce actually stored for this
+            // session, so the stored Nonce could never be used to validate what was
+            // really sent to the Wallet. Now reads the real per-session nonce, and
+            // persists the exact client_id issued here so the response (KB-JWT
+            // `aud`, for SD-JWT VC) can be checked against it later.
+            // See OID4VP-1.0-COMPLIANCE-AUDIT.md finding C-03 / C-02.
+            VerifierDbContext context = new VerifierDbContext();
+            var session = context.Dbverifiersessions.Where(s => s.Id == stateid).FirstOrDefault();
+            if (session == null || session.ExpiresAt < DateTime.UtcNow)
+            {
+                return NotFound();
+            }
+            string nonce = session.Nonce;
+            string clientId = $"redirect_uri:{baseUrl}/openid4vc/verify/{stateid}";
+            session.ClientId = clientId;
+
+            // FIX (Phase 1 item 2, 2026-08-09): persist the exact DCQL query issued
+            // for this session so VerifierVP can later check the returned credential
+            // against what was actually requested, instead of trusting the Wallet's
+            // response blindly. See OID4VP-1.0-COMPLIANCE-AUDIT.md Phase 1 item 2 / H-04.
+            var dcqlQueryObj = vcServ.BuildDcqlQuery(docType, Request);
+            session.DcqlQuery = JsonConvert.SerializeObject(dcqlQueryObj);
+            context.SaveChanges();
 
             // Build client_metadata จาก DB
             var algValues = JsonConvert.DeserializeObject<string[]>(docType.AlgValues);
@@ -393,10 +420,10 @@ namespace VerifierAPI.Controllers
             var payloadObj = new
             {
                 response_type = "vp_token",
-                client_id = $"redirect_uri:{baseUrl}/openid4vc/verify/{stateid}",
+                client_id = clientId,
                 response_mode = "direct_post",
                 state = stateid,
-                dcql_query = vcServ.BuildDcqlQuery(docType, Request),
+                dcql_query = dcqlQueryObj,
                 client_metadata = clientMetadata,
                 nonce = nonce,
                 response_uri = $"{baseUrl}/openid4vc/verify/{stateid}"
@@ -446,10 +473,76 @@ namespace VerifierAPI.Controllers
             string stateid = null;
             string details = null;
             string vpTokenForResolve = null;
+
+            // SECURITY (session consumption + C-02/C-03 dependency, 2026-08-08): look
+            // up and validate the session up front, before any cryptographic work, so
+            // an unknown/expired/already-consumed session is rejected immediately, and
+            // so session.Nonce / session.ClientId are available for the SD-JWT KB-JWT
+            // nonce/aud check below. See OID4VP-1.0-COMPLIANCE-AUDIT.md C-02 / H-07.
+            VerifierDbContext context;
+            Dbverifiersession session;
+            try
+            {
+                context = new VerifierDbContext();
+                session = context.Dbverifiersessions.Where(s => s.Id == state).FirstOrDefault();
+            }
+            catch (Exception)
+            {
+                return BadRequest(new
+                {
+                    error = "invalid_request",
+                    error_description = "Present VP is invalid"
+                });
+            }
+            if (session == null)
+            {
+                return BadRequest(new
+                {
+                    error = "invalid_request",
+                    error_description = "Unknown session"
+                });
+            }
+            if (session.ExpiresAt < DateTime.UtcNow)
+            {
+                return BadRequest(new
+                {
+                    error = "invalid_request",
+                    error_description = "Session has expired"
+                });
+            }
+            if (string.Equals(session.Status, "Consumed", StringComparison.OrdinalIgnoreCase))
+            {
+                logger.Info("Rejected: session already consumed (replay attempt)");
+                return BadRequest(new
+                {
+                    error = "invalid_request",
+                    error_description = "This session has already been used"
+                });
+            }
+
+            // FIX (Phase 1 item 6 / H-05, 2026-08-09): look up this session's
+            // configured AlgValues so the credential's signature algorithm can be
+            // checked against what's actually permitted for its format/query,
+            // instead of silently accepting whatever alg the token declares.
+            // See OID4VP-1.0-COMPLIANCE-AUDIT.md Phase 1 item 6 / H-05.
+            string[] permittedAlgs = null;
+            try
+            {
+                var docTypeForAlg = context.Dbdocumenttypes.Where(d => d.TypeId == session.DocTypeId).FirstOrDefault();
+                if (!string.IsNullOrEmpty(docTypeForAlg?.AlgValues))
+                {
+                    permittedAlgs = JsonConvert.DeserializeObject<string[]>(docTypeForAlg.AlgValues);
+                }
+            }
+            catch (Exception)
+            {
+                permittedAlgs = null; // fail open on lookup errors — VerifyJWS treats null as "no restriction"
+            }
+
             try
             {
 
-                logger.Info($"vp_tojen => {vp_token}");
+                logger.Info("VerifierVP: request received");
                 // ✅ เพิ่มตรงนี้ — แก้ vp_token ถ้าเป็น JSON array
                 if (!string.IsNullOrEmpty(vp_token) && vp_token.TrimStart().StartsWith("["))
                 {
@@ -457,7 +550,7 @@ namespace VerifierAPI.Controllers
                     {
                         var arr = System.Text.Json.JsonSerializer.Deserialize<string[]>(vp_token);
                         vp_token = arr?.FirstOrDefault() ?? vp_token;
-                        logger.Info($"vp_token extracted from array: {vp_token?.Substring(0, Math.Min(50, vp_token?.Length ?? 0))}");
+                        logger.Info("vp_token extracted from array");
                     }
                     catch
                     {
@@ -469,12 +562,12 @@ namespace VerifierAPI.Controllers
                 if (vpTokenForResolve != null && vpTokenForResolve.Contains('~'))
                 {
                     vpTokenForResolve = vpTokenForResolve.Split('~')[0];
-                    logger.Info($"SD-JWT detected, using JWT part: {vpTokenForResolve.Substring(0, Math.Min(30, vpTokenForResolve.Length))}...");
+                    logger.Info("SD-JWT detected, using JWT part");
                 }
                 JWSModel jwsModel = vpServ.ResolvePublicKey(vpTokenForResolve);
                 jwsModel.vptoken = vpTokenForResolve;
                 string didkey = jwsModel.didkey;
-               
+
 
                 if (string.IsNullOrEmpty(didkey))
                 {
@@ -488,9 +581,8 @@ namespace VerifierAPI.Controllers
 
                 // logs.Add(JsonSerializer.Serialize("=>> " + didkey, new JsonSerializerOptions { WriteIndented = true }));
 
-                Task<string> x = vpServ.ResolveDID(didkey);
-                logger.Info($"vp_token => {vpTokenForResolve}");
-                logger.Info($"x.Result => {x.Result}");
+                Task<string> x = vpServ.ResolveDID(didkey, jwsModel.kidFull);
+                logger.Info("Resolving VP signer DID");
                 if (vpServ.VerifyJWS(vpTokenForResolve?.Trim(), x.Result, out string ErrMsg))
                 {
                     //logs.Add(JsonSerializer.Serialize("Start Verify VC", new JsonSerializerOptions { WriteIndented = true }));
@@ -521,25 +613,143 @@ namespace VerifierAPI.Controllers
                     issuer_did = vcModel.didkey;
 
 
-                    Task<string> vc_x = vpServ.ResolveDID(issuer_did);
+                    Task<string> vc_x = vpServ.ResolveDID(issuer_did, vcModel.kidFull);
                     logger.Info($"issuer_did => {issuer_did}");
-                    logger.Info($"vctoken => {vctoken}");
-                    logger.Info($"jwtForVerify => {jwtForVerify?.Substring(0, 20)}...");
-                    logger.Info($"vc_x.Result => {vc_x.Result}");
                     //check vc jws
 
-                    if (vpServ.VerifyJWS(jwtForVerify, vc_x.Result, out ErrMsg))
+                    if (isSdJwt)
+                    {
+                        // SECURITY (C-04 remediation, 2026-08-08): full SD-JWT VC
+                        // verification — disclosure digests, KB-JWT signature against
+                        // the holder key declared in `cnf`, sd_hash, and KB-JWT
+                        // nonce/aud/iat against this session. Replaces the Phase 0
+                        // hard-reject of dc+sd-jwt now that this exists.
+                        // See OID4VP-1.0-COMPLIANCE-AUDIT.md finding C-04.
+                        var sdResult = vpServ.VerifySDJWTPresentation(
+                            vctoken,
+                            vc_x.Result,
+                            session.Nonce,
+                            session.ClientId,
+                            permittedAlgs);
+
+                        if (!sdResult.IsValid)
+                        {
+                            logger.Info($"SD-JWT verify failed: {sdResult.ErrorCode} — {sdResult.ErrorMessage}");
+                            return BadRequest(new
+                            {
+                                error = "invalid_request",
+                                error_description = "Present VP is invalid",
+                                reason = sdResult.ErrorCode
+                            });
+                        }
+
+                        // FIX (Phase 1 item 8 / H-04, 2026-08-09): confirm the returned
+                        // credential's vct matches what this session's DCQL query
+                        // actually asked for, instead of accepting whatever vct the
+                        // Wallet sent and only using it to pick a display route.
+                        // See OID4VP-1.0-COMPLIANCE-AUDIT.md Phase 1 item 8 / H-04.
+                        string actualVct = vpServ.GetVctFromSdJwt(vctoken);
+                        if (!vpServ.ValidateAgainstDcqlQuery(session.DcqlQuery, "dc+sd-jwt", actualVct, out string sdDcqlErr))
+                        {
+                            logger.Info($"SD-JWT DCQL result check failed: {sdDcqlErr}");
+                            return BadRequest(new
+                            {
+                                error = "invalid_request",
+                                error_description = "Present VP is invalid",
+                                reason = sdDcqlErr
+                            });
+                        }
+
+                        vc_token = vp_token?.Trim(); // เก็บ VC เต็ม (รวม ~ disclosures + KB-JWT)
+                        logger.Info("SD-JWT VC verify passed (disclosures + KB-JWT + nonce/aud verified)");
+                    }
+                    else if (vpServ.VerifyJWS(jwtForVerify, vc_x.Result, out ErrMsg, permittedAlgs))
                     {
                         //vcModel = vpServ.ResolvePublicKey(vctoken);
                         //byte[] vcDecode = vpServ.Base64UrlDecode(vcModel.payload);
                         //vcResult = Encoding.UTF8.GetString(vcDecode);
                         //vc_token = vcModel.payload;
 
+                        // FIX (Phase 1 item 7 / C-02, 2026-08-09): the outer VP-JWT's
+                        // own nonce/aud must match this session — previously never
+                        // checked for jwt_vc_json (only the SD-JWT KB-JWT path had an
+                        // equivalent check). See OID4VP-1.0-COMPLIANCE-AUDIT.md
+                        // Phase 1 item 7 / C-02.
+                        if (!vpServ.ValidateVpNonceAndAudience(vp_payload, session.Nonce, session.ClientId, out string nonceAudErr))
+                        {
+                            logger.Info($"jwt_vc_json VP nonce/aud check failed: {nonceAudErr}");
+                            return BadRequest(new
+                            {
+                                error = "invalid_request",
+                                error_description = "Present VP is invalid",
+                                reason = nonceAudErr
+                            });
+                        }
+
                         vcModel = vpServ.ResolvePublicKey(jwtForVerify);
                         byte[] vcDecode = vpServ.Base64UrlDecode(vcModel.payload);
                         vcResult = Encoding.UTF8.GetString(vcDecode);
                         vc_token = vp_token?.Trim(); // เก็บ VC เต็ม (รวม ~ disclosures ถ้าเป็น SD-JWT)
                         logger.Info($"VC verify passed, isSdJwt={isSdJwt}");
+
+                        // FIX (Phase 1 item 8 / H-04, 2026-08-09): credential time
+                        // validity (nbf/exp) + confirm the returned credential's type
+                        // matches what this session's DCQL query asked for. Parse
+                        // failures here fall through and let the existing (pre-item-8)
+                        // flow continue rather than newly hard-failing on a shape this
+                        // wasn't written to anticipate.
+                        // See OID4VP-1.0-COMPLIANCE-AUDIT.md Phase 1 item 8 / H-04.
+                        try
+                        {
+                            using JsonDocument vcDoc = JsonDocument.Parse(vcResult);
+                            long? credNbf = vcDoc.RootElement.TryGetProperty("nbf", out var nbfEl) && nbfEl.TryGetInt64(out long nbfVal) ? nbfVal : (long?)null;
+                            long? credExp = vcDoc.RootElement.TryGetProperty("exp", out var expEl) && expEl.TryGetInt64(out long expVal) ? expVal : (long?)null;
+                            if (!vpServ.IsCredentialTimeValid(credNbf, credExp, out string timeErr))
+                            {
+                                logger.Info($"jwt_vc_json time validity check failed: {timeErr}");
+                                return BadRequest(new
+                                {
+                                    error = "invalid_request",
+                                    error_description = "Present VP is invalid",
+                                    reason = timeErr
+                                });
+                            }
+
+                            string actualType = null;
+                            if (vcDoc.RootElement.TryGetProperty("vc", out var vcEl) &&
+                                vcEl.TryGetProperty("type", out var typeEl) && typeEl.ValueKind == JsonValueKind.Array)
+                            {
+                                actualType = typeEl.EnumerateArray()
+                                    .Select(t => t.ValueKind == JsonValueKind.String ? t.GetString() : null)
+                                    .Where(t => t != null)
+                                    .LastOrDefault();
+                            }
+                            if (!vpServ.ValidateAgainstDcqlQuery(session.DcqlQuery, "jwt_vc_json", actualType, out string jwtDcqlErr))
+                            {
+                                logger.Info($"jwt_vc_json DCQL result check failed: {jwtDcqlErr}");
+                                return BadRequest(new
+                                {
+                                    error = "invalid_request",
+                                    error_description = "Present VP is invalid",
+                                    reason = jwtDcqlErr
+                                });
+                            }
+                        }
+                        catch (System.Text.Json.JsonException)
+                        {
+                            // A JWT payload is JSON by definition, so if this segment
+                            // doesn't parse, the credential is malformed/corrupted —
+                            // not just "an unexpected but valid shape" (those are
+                            // handled above via TryGetProperty without throwing).
+                            // Reject rather than silently skip time/DCQL validation.
+                            logger.Info("jwt_vc_json VC payload was not valid JSON");
+                            return BadRequest(new
+                            {
+                                error = "invalid_request",
+                                error_description = "Present VP is invalid",
+                                reason = "malformed_vc_payload"
+                            });
+                        }
 
                         //decodeURIComponent()
                         //**var data = Json(vcResult);
@@ -549,7 +759,16 @@ namespace VerifierAPI.Controllers
                     }
                     else
                     {
+                        // FIX (M-04, 2026-08-08): previously fell through and still
+                        // wrote a "successful" response row / returned 200 even though
+                        // the VC signature never verified, which made GetScanStatus
+                        // report "completed" for a credential that failed verification.
                         logger.Info($"VC verify failed: {ErrMsg}");
+                        return BadRequest(new
+                        {
+                            error = "invalid_request",
+                            error_description = "Present VP is invalid"
+                        });
                     }
 
                 }
@@ -597,11 +816,8 @@ namespace VerifierAPI.Controllers
                 {
                     baseUrl = $"{externalBase}/PresentResult/BootCamp/{state}";
                 }
-                
-
 
                 //save to result to db
-                VerifierDbContext context = new VerifierDbContext();
                 Dbverifierresponse dbresult = new Dbverifierresponse();
 
                 //dbresult.Id = vpServ.GetGUID();
@@ -626,6 +842,12 @@ namespace VerifierAPI.Controllers
                     context.Dbverifierresponses.Add(dbresult);
                 }
 
+                // mark the session consumed in the same SaveChanges (single DB
+                // transaction) as the response write, so a session can't be read as
+                // "still open" between the two writes.
+                session.Status = "Consumed";
+                session.CompletedAt = DateTime.UtcNow;
+
                 context.SaveChanges();
             }
             catch (Exception e)
@@ -648,11 +870,23 @@ namespace VerifierAPI.Controllers
         }
 
 
+        // SECURITY (Phase 0 remediation, 2026-08-08): this endpoint returned the raw
+        // VP token and VC payload for any supplied session ID with no authorization
+        // check, disclosing identity data to anyone who obtained or guessed a
+        // session ID. Disabled until authenticated/authorized access and
+        // minimum-necessary claim disclosure are implemented. See
+        // OID4VP-1.0-COMPLIANCE-AUDIT.md finding H-08.
         [Route("vp/{id}")]
         [HttpGet]
         [Tags("Verifier")]
         public IActionResult GetVP(string id)
         {
+            return StatusCode(410, new
+            {
+                error = "endpoint_disabled",
+                error_description = "This endpoint has been disabled pending authorization controls (see H-08 in the compliance audit)."
+            });
+#pragma warning disable CS0162
             try
             {
                 if (string.IsNullOrWhiteSpace(id))
@@ -680,6 +914,7 @@ namespace VerifierAPI.Controllers
                 logger.Error($"GetVP error: {ex.Message}");
                 return StatusCode(500, new { error = ex.Message });
             }
+#pragma warning restore CS0162
         }
 
         //[HttpGet("/verifier/status/{sessionId}")]

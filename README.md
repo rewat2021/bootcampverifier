@@ -82,10 +82,6 @@ docker-compose down
 
 ข้อมูลใน volume `verifier-mysql-data` จะยังอยู่แม้ `down` แล้ว เว้นแต่สั่ง `docker-compose down -v` (ลบ volume ด้วย — ระวังถ้ามีข้อมูลสำคัญอยู่ในนั้น)
 
-### 2.8 หมายเหตุ: MySQL container ในเครื่องไม่ได้ถูกใช้งานจริง
-
-`docker-compose.yml` ยังนิยาม service `verifier-mysql` ไว้ และ `verifier-api` ตั้ง `depends_on: verifier-mysql: condition: service_healthy` — เพราะตอนนี้ `CONNECTION_STRING` ชี้ไป MySQL remote (`192.100.10.48`) โดยตรงแล้ว container `verifier-mysql` ในเครื่องจะยังถูกสร้างขึ้นมาด้วยทุกครั้งที่ `docker-compose up` แต่**ไม่ได้ถูกใช้งานจริงเลย** — เสียพื้นที่ดิสก์และพอร์ต 3307 ไปโดยเปล่าประโยชน์ ไม่กระทบการทำงาน (แค่เสียทรัพยากรเฉยๆ) แต่ถ้าต้องการตัดออกให้เหลือรันแค่ `verifier-api` อย่างเดียว บอกได้ ผมแก้ `docker-compose.yml` ให้เอา service `verifier-mysql` กับ `depends_on` ออกได้เลย
-
 ## 3. Restore ฐานข้อมูลจากไฟล์ dump (.sql)
 
 ใช้เมื่อมีไฟล์ mysqldump (เช่น `Dump20260826.sql`) ที่ต้องการ import กลับเข้า MySQL remote (`192.100.10.48`) — ไฟล์แบบนี้มักได้มาจากการ backup ด้วย `mysqldump` หรือมีคนส่งมาให้ทีม

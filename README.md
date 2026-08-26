@@ -117,12 +117,6 @@ docker run --rm mysql:8.0 mysql -h 192.100.10.48 -P 3306 -u root -p"<password �
 
 หรือเปิดแอป (`http://localhost:5001`) แล้วดูหน้า `/AuditLog` หรือลอง flow verify จริงว่าข้อมูลขึ้นถูกต้อง
 
-### หมายเหตุ
-
-- ไม่ต้อง restart container `verifier-api` หลัง restore DB — แอปต่อ MySQL remote สดทุกครั้งอยู่แล้ว ไม่มีการแคชข้อมูลไว้ในโปรเซส
-- ถ้า restore แล้วแอป error เกี่ยวกับ schema ไม่ตรง (เช่น คอลัมน์หาย/ชื่อไม่ตรง) ให้เทียบ schema ในไฟล์ dump กับ `db/init.sql` และ `db/migrations/` ในโปรเจกต์ว่าตรงเวอร์ชันกันหรือไม่ ก่อน restore
-- ทั้ง 3 คำสั่งข้างต้นไม่เกี่ยวกับ `docker-compose.yml`/`lab-network` เลย — เป็นแค่ `docker run` ตัวเดี่ยวๆ ที่ยิงตรงไปหา MySQL remote จากเครื่อง host เท่านั้น ใช้ได้แม้ยังไม่เคย `docker-compose up` มาก่อน
-
 ## 4. Rotate ThaID ClientSecret
 
 ค่า `ClientSecret` เดิมเคยถูก commit ไว้ใน `appsettings.json` มาก่อน (พบระหว่างการตรวจสอบตาม `OID4VP-1.0-COMPLIANCE-AUDIT.md` finding C-05) ต้องถือว่ารั่วแล้วแม้จะลบออกจาก working tree ปัจจุบันไปแล้วก็ตาม เพราะยังอยู่ใน git history

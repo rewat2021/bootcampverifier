@@ -20,7 +20,7 @@
 ### 2.1 Prerequisites
 
 - ติดตั้ง Docker + Docker Compose แล้ว
-- เครื่องที่รัน Docker เข้าถึง MySQL remote ได้จริง (ทดสอบ `telnet 192.100.10.48 3306` หรือใช้ MySQL client ต่อดูก่อน)
+- เครื่องที่รัน Docker เข้าถึง MySQL remote ได้จริง 
 
 ### 2.2 สร้าง Docker network ภายนอกที่จำเป็น
 

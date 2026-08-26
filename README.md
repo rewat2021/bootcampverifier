@@ -2,15 +2,6 @@
 
 **อัปเดตล่าสุด:** 2026-08-26
 
-
-## ภาพรวม
-
-ตั้งแต่การแก้ไขรอบนี้ **secret ทั้งหมดของ VerifierAPI มาจากไฟล์ `.env` ไฟล์เดียวที่ root ของ repo** (`bootcamp_verifier/.env`) — `appsettings.json` ไม่มี secret จริงฝังอยู่อีกต่อไป (ClientID/ClientSecret ของ ThaID ถูกลบออกทั้ง key แล้ว)
-
-`docker-compose.yml` มี `env_file: .env` — inject ตัวแปรเข้า container โดยตรงตอน `docker-compose up`
-
-ไฟล์ `.env` อยู่ใน `.gitignore` แล้ว **ห้าม commit ขึ้น git เด็ดขาด**
-
 ## 1. ตัวแปรใน `.env`
 
 | ตัวแปร | จำเป็นหรือไม่ | คำอธิบาย |

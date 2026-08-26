@@ -5,6 +5,8 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>เอกสาร STANDARD VC</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Kanit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
         :root {
             --navy: #0a1f6b;
@@ -22,46 +24,55 @@
 
         html,
         body {
-            overflow-x: hidden;
+            height: 100%;
+            overflow: hidden;
         }
 
         body {
-            font-family: "Sarabun", "Noto Sans Thai", Arial, sans-serif;
+            font-family: "Kanit", "Sarabun", "Noto Sans Thai", Arial, sans-serif;
             background: #ffffff;
-            min-height: 100vh;
+            height: 100dvh;
+            display: flex;
+            flex-direction: column;
         }
 
         header.topbar {
             background: var(--navy);
             color: #fff;
-            padding: 20px 24px;
+            padding: clamp(10px, 2.5vh, 20px) 24px;
             display: flex;
             align-items: center;
+            flex-shrink: 0;
         }
 
             header.topbar h1 {
-                font-size: clamp(18px, 2.6vw, 26px);
+                font-size: clamp(16px, min(2.6vw, 2.4vh), 26px);
                 font-weight: 700;
             }
 
         main {
+            flex: 1;
+            min-height: 0;
             display: flex;
             justify-content: center;
             align-items: center;
-            padding: 40px 16px;
-            min-height: calc(100vh - 76px);
+            padding: clamp(10px, 3vh, 40px) 16px;
+            overflow: hidden;
         }
 
         .login-card {
             width: 100%;
             max-width: 1003px;
+            max-height: 100%;
             border: 2px solid var(--border-blue);
             border-radius: 20px;
-            padding: 58px 32px;
+            padding: clamp(18px, 5vh, 58px) clamp(16px, 4vw, 32px);
             display: flex;
             flex-direction: column;
             align-items: center;
-            gap: 20px;
+            justify-content: center;
+            gap: clamp(10px, 2.5vh, 20px);
+            overflow: hidden;
         }
 
             .login-card .title {
@@ -70,13 +81,13 @@
             }
 
                 .login-card .title .line1 {
-                    font-size: clamp(20px, 3.5vw, 38px);
+                    font-size: clamp(18px, min(3.5vw, 4.2vh), 38px);
                     font-weight: 700;
                     margin-bottom: 6px;
                 }
 
                 .login-card .title .line2 {
-                    font-size: clamp(20px, 3.5vw, 38px);
+                    font-size: clamp(18px, min(3.5vw, 4.2vh), 38px);
                     font-weight: 800;
                     letter-spacing: 1px;
                 }
@@ -87,25 +98,25 @@
             display: flex;
             flex-direction: column;
             align-items: center;
-            gap: 28px;
+            gap: clamp(12px, 3vh, 28px);
         }
 
         .thaid-desc {
             text-align: center;
             color: var(--text-gray);
-            font-size: 15px;
-            line-height: 1.6;
+            font-size: clamp(12px, min(2vw, 1.8vh), 15px);
+            line-height: 1.5;
             max-width: 480px;
         }
 
         .thaid-btn {
             width: 100%;
             max-width: 400px;
-            height: 76px;
+            height: clamp(48px, min(10vw, 8vh), 76px);
             padding: 0 24px;
             border: none;
             border-radius: 12px;
-            font-size: 18px;
+            font-size: clamp(14px, min(2.2vw, 2vh), 18px);
             font-weight: 600;
             color: #fff;
             cursor: pointer;
@@ -127,8 +138,8 @@
             }
 
             .thaid-btn .icon {
-                width: 28px;
-                height: 28px;
+                width: clamp(22px, min(4vw, 3.6vh), 28px);
+                height: clamp(22px, min(4vw, 3.6vh), 28px);
                 border-radius: 6px;
                 background: #fff;
                 color: var(--navy);
@@ -140,51 +151,14 @@
                 flex-shrink: 0;
             }
 
-        /* Responsive breakpoints */
-        @@media (max-width: 768px) {
-            .login-card {
-                min-height: 560px;
-                padding: 44px 28px;
-                gap: 36px;
-            }
-
-            .thaid-btn {
-                height: 68px;
-            }
-        }
-
-        @@media (max-width: 600px) {
-            .login-card {
-                min-height: unset;
-                padding: 36px 20px;
-                border-radius: 16px;
-                gap: 24px;
-            }
-
-            header.topbar {
-                padding: 16px 20px;
-            }
-        }
-
+        /* All sizing above is fluid (clamp, bounded by both vw and vh), so the
+           card always scales down to fit the viewport instead of overflowing —
+           no width/height breakpoints needed to avoid a scrollbar. Kept a
+           small-width tweak only for the border radius, which doesn't have a
+           natural fluid equivalent. */
         @@media (max-width: 380px) {
             .login-card {
-                padding: 28px 14px;
-            }
-
-            .thaid-btn {
-                height: 60px;
-                font-size: 16px;
-            }
-        }
-
-        /* Short / landscape viewports */
-        @@media (max-height: 700px) {
-            .login-card {
-                min-height: unset;
-            }
-
-            main {
-                padding: 24px 16px;
+                border-radius: 16px;
             }
         }</style>
 </head>

@@ -86,25 +86,58 @@ public class VerifierScanController : ControllerBase
             return BadRequest(new { status = "failed", error = "missing_session_id" });
 
         var context = new VerifierDbContext();
-        var result = context.Dbverifierresponses
-            .Where(r => r.SessionId == sessionId)
-            .FirstOrDefault();
 
-        // ยังไม่มีแถวเลย = wallet ยังไม่ได้ส่งอะไรกลับมา
-        if (result == null || (string.IsNullOrWhiteSpace(result.VpToken) && string.IsNullOrWhiteSpace(result.VcPayload)))
-            return Ok(new { status = "pending" });
+        // FIX (M-04 remediation, 2026-08-23): this used to infer status purely from
+        // whether a Dbverifierresponse row existed — "Wallet hasn't answered yet" and
+        // "Wallet answered but verification failed" both showed as "pending" forever
+        // (until the session's own 10-minute expiry), because
+        // VerifierController.VerifierVP only ever wrote a response row on a
+        // successful verification. Every verify-failure path there now marks
+        // session.Status = "Failed" (see VerifierVP's FailSession local function), so
+        // read the session's own status as the source of truth here instead of
+        // continuing to guess from row presence — this is also what lets the existing
+        // frontend polling in VerifyScanQR.cshtml (which already checks
+        // `data.status === 'failed'` and shows a rejection screen) actually fire.
+        // Reports the four explicit states the original audit (M-03) called for:
+        // pending / completed / failed / expired.
+        // See OID4VP-1.0-COMPLIANCE-AUDIT.md finding M-04.
+        var session = context.Dbverifiersessions.Where(s => s.Id == sessionId).FirstOrDefault();
+        if (session == null)
+            return Ok(new { status = "unknown" });
 
-        // TODO: ตอนนี้เดาว่า "มีแถว + มี payload" = ตรวจผ่านเสมอ
-        // ถ้าตาราง Dbverifierresponses มีคอลัมน์บอกผลจริง (เช่น IsValid, ErrorReason,
-        // VerificationStatus) ควรใช้ค่านั้นตัดสิน แทนการเดาจากแค่ "มีข้อมูลหรือไม่"
-        // บรรทัดด้านล่างสมมติว่ามีคอลัมน์ชื่อ ErrorReason — ถ้าไม่มีให้ลบทิ้ง
-        //if (!string.IsNullOrWhiteSpace(result.ErrorReason))
-        //{
-        //    return Ok(new { status = "failed", error = result.ErrorReason });
-        //}
+        if (string.Equals(session.Status, "Failed", StringComparison.OrdinalIgnoreCase))
+            return Ok(new { status = "failed", error = "verification_failed" });
 
-        var claims = ParseClaimsFromVcPayload(result.VcPayload);
-        return Ok(new { status = "completed", claims });
+        if (string.Equals(session.Status, "Consumed", StringComparison.OrdinalIgnoreCase))
+        {
+            var result = context.Dbverifierresponses
+                .Where(r => r.SessionId == sessionId)
+                .FirstOrDefault();
+
+            if (result == null || (string.IsNullOrWhiteSpace(result.VpToken) && string.IsNullOrWhiteSpace(result.VcPayload)))
+            {
+                // Consumed but no usable payload persisted — shouldn't normally happen
+                // (VerifierVP writes the response row and consumes the session in the
+                // same SaveChanges call), but don't report "completed" without a
+                // payload to back it up.
+                return Ok(new { status = "failed", error = "missing_result" });
+            }
+
+            var claims = ParseClaimsFromVcPayload(result.VcPayload);
+            // FIX (M-02, 2026-08-09): PresentResult/Result now looks results up by the
+            // freshly generated ResponseCode instead of the session id (see
+            // VerifierController.VerifierVP), so the polling JS that navigates the
+            // operator's browser there needs this code, not the session id it already
+            // has. See OID4VP-1.0-COMPLIANCE-AUDIT.md finding M-02.
+            return Ok(new { status = "completed", claims, response_code = result.ResponseCode });
+        }
+
+        // Status is "Pending" — still waiting on the Wallet, unless the session
+        // itself has expired in the meantime.
+        if (session.ExpiresAt < DateTime.UtcNow)
+            return Ok(new { status = "expired" });
+
+        return Ok(new { status = "pending" });
     }
 
     private static Dictionary<string, object> ParseClaimsFromVcPayload(string? vcPayload)

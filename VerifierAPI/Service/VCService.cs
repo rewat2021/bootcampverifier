@@ -2,8 +2,10 @@
 using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.IdentityModel.Tokens;
 using Newtonsoft.Json;
+using NLog;
 using NSec.Cryptography;
 using Org.BouncyCastle.Asn1.Ocsp;
+using Org.BouncyCastle.Asn1.Sec;
 using Org.BouncyCastle.Crypto.Generators;
 using Org.BouncyCastle.Crypto.Parameters;
 using Org.BouncyCastle.Crypto.Signers;
@@ -56,6 +58,16 @@ namespace VerifierAPI.Service
 
     public class VCService
     {
+        // FIX (silent DID-resolution failure diagnosability, 2026-08-21): ResolveDID
+        // below used to swallow every failure with Console.WriteLine(e), which does not
+        // reach the NLog file the app's other logging goes to — a resolver timeout,
+        // non-200 response, or "no verificationMethod matched" all looked identical
+        // from the outside: ResolveDID silently returned null, and the caller
+        // (VerifierController.VerifierVP -> VerifyJWS) then hit an unguarded
+        // NullReferenceException ("Object reference not set to an instance of an
+        // object.") with no indication *why* the key never resolved.
+        private static readonly Logger logger = LogManager.GetCurrentClassLogger();
+
         public JWSModel jwsModel { get; set; }
         public VCService()
         {
@@ -136,13 +148,129 @@ namespace VerifierAPI.Service
             return result;
         }
 
+        // FIX (did:web resolution, 2026-08-21): the Issuer's DID is did:web, which is
+        // NOT resolved through a universal-resolver-style "/1.0/identifiers/{did}"
+        // proxy endpoint like resolver-test.etda.or.th — that endpoint has no did:web
+        // driver, so every did:web lookup was silently returning null (see the
+        // ResolveDID logging added just above: this is what
+        // "Outer VP JWS verify failed: Object reference not set to an instance of an
+        // object." traced back to). Per the did:web spec
+        // (https://w3c-ccg.github.io/did-method-web/), a did:web DID resolves by
+        // transforming it directly into an HTTPS URL on the domain it names and
+        // fetching the DID document from there — no resolver service involved at all:
+        //   did:web:example.com                  -> https://example.com/.well-known/did.json
+        //   did:web:example.com:issuer            -> https://example.com/issuer/did.json
+        //   did:web:example.com%3A455:issuer      -> https://example.com:455/issuer/did.json
+        // (a literal ":" after the domain is a path separator; a port number is
+        // percent-encoded as %3A per the spec, since colon there would otherwise be
+        // ambiguous with a path segment).
+        private static string BuildDidWebUrl(string did)
+        {
+            const string prefix = "did:web:";
+            string rest = did.Substring(prefix.Length);
+            var segments = rest.Split(':').Select(Uri.UnescapeDataString).ToArray();
+            if (segments.Length == 0 || string.IsNullOrEmpty(segments[0]))
+                throw new ArgumentException($"Malformed did:web identifier: '{did}'");
+
+            string domain = segments[0];
+            return segments.Length == 1
+                ? $"https://{domain}/.well-known/did.json"
+                : $"https://{domain}/{string.Join("/", segments.Skip(1))}/did.json";
+        }
+
+        // FIX (native did:key resolution, 2026-08-21): switched DID resolution over to
+        // did:key — per the did:key spec, did:key is fully self-certifying (the DID
+        // string itself IS the multicodec+multibase-encoded public key), so there is
+        // no resolver service involved at all, unlike did:web (fetched over HTTPS
+        // from the named domain, see BuildDidWebUrl above) or a registry-backed method.
+        // Decoding it locally means credential verification no longer depends on
+        // resolver-test.etda.or.th having (or keeping) a working did:key driver, and
+        // has no network round-trip / timeout / firewall exposure at all — the same
+        // class of failure that blocked did:web resolution to issuer.zenithcomp.co.th.
+        // Supports the two key types this codebase actually issues/signs with:
+        //   - Ed25519: multicodec 0xed01 (2-byte prefix), matches the encoding
+        //     VCService._GetDID already produces for the Verifier's own Ed25519 did:key.
+        //   - P-256/secp256r1: multicodec 0x1200 (varint-encoded as {0x80,0x24}),
+        //     matches BuildP256DidKeyMultibase's encoding for the Verifier's ES256
+        //     did:key. The multibase value is a SEC1-*compressed* point (33 bytes);
+        //     BouncyCastle's ECCurve.DecodePoint below decompresses it back to the
+        //     full (x, y) needed by VerifyJWS's ES256 path (which itself only accepts
+        //     uncompressed x/y, IEEE P1363 style — .NET's ECParameters has no built-in
+        //     compressed-point import).
+        private static string ResolveDidKeyPublicKey(string did)
+        {
+            const string prefix = "did:key:";
+            string didOnly = did.Split('#')[0]; // did:key has at most one verification method — ignore any fragment
+            if (!didOnly.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException($"Not a did:key identifier: '{did}'");
+
+            string multibase = didOnly.Substring(prefix.Length);
+            if (multibase.Length < 2 || multibase[0] != 'z')
+                throw new ArgumentException($"Unsupported did:key multibase prefix (expected 'z' / base58btc): '{did}'");
+
+            // .ToArray() normalizes regardless of whether this SimpleBase version's
+            // Decode returns byte[] or a Span<byte>/ReadOnlySpan<byte>.
+            byte[] decoded = Base58.Bitcoin.Decode(multibase.Substring(1)).ToArray();
+
+            if (decoded.Length > 2 && decoded[0] == 0xED && decoded[1] == 0x01)
+            {
+                // Ed25519 — raw 32-byte public key follows the 2-byte multicodec prefix.
+                // Returned base64url-encoded to match the shape VerifyJWS's Ed25519 path
+                // already expects (the same shape ResolveDID returns for a JWK's raw "x").
+                byte[] rawKey = decoded.Skip(2).ToArray();
+                return WebEncoders.Base64UrlEncode(rawKey);
+            }
+
+            if (decoded.Length > 2 && decoded[0] == 0x80 && decoded[1] == 0x24)
+            {
+                // P-256 — SEC1-compressed point follows the 2-byte multicodec prefix.
+                byte[] compressed = decoded.Skip(2).ToArray();
+                var curve = SecNamedCurves.GetByName("secp256r1").Curve;
+                var point = curve.DecodePoint(compressed).Normalize();
+                string x = WebEncoders.Base64UrlEncode(point.AffineXCoord.GetEncoded());
+                string y = WebEncoders.Base64UrlEncode(point.AffineYCoord.GetEncoded());
+                // Matches the {"crv","x","y"} shape VerifyJWS's ES256 branch expects.
+                return JsonConvert.SerializeObject(new { crv = "P-256", x, y });
+            }
+
+            throw new NotSupportedException(
+                $"Unsupported did:key multicodec prefix in '{did}' (first bytes: {(decoded.Length > 0 ? decoded[0] : 0):X2}{(decoded.Length > 1 ? decoded[1] : 0):X2})");
+        }
+
         public async Task<string> ResolveDID(string key, string exactKid = null)
         {
+            if (key.StartsWith("did:key:", StringComparison.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    string resolved = ResolveDidKeyPublicKey(key);
+                    logger.Info($"ResolveDID: resolved '{key}' locally (did:key — no network call)");
+                    return resolved;
+                }
+                catch (Exception e)
+                {
+                    logger.Info($"ResolveDID: local did:key decode failed for '{key}': {e.GetType().Name}: {e.Message}");
+                    return null;
+                }
+            }
+
             string publickey = null;
             try
             {
-                HttpClient client = new HttpClient();
-                string url = $"https://resolver-test.etda.or.th/1.0/identifiers/{key}";
+                // FIX (bounded resolver timeout, 2026-08-21): default HttpClient timeout
+                // is 100s — a network-level failure (firewall silently dropping packets
+                // rather than refusing the connection, as seen resolving a did:web whose
+                // host was unreachable from this server) could otherwise hang the whole
+                // VerifierVP request for up to that long before failing. 10s matches the
+                // timeout already used for the broker HttpClient (H-10, Program.cs).
+                HttpClient client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+                // did:web resolves directly against the domain it names (see
+                // BuildDidWebUrl above); every other DID method here still goes through
+                // the shared universal-resolver-style proxy, unchanged.
+                string url = key.StartsWith("did:web:", StringComparison.OrdinalIgnoreCase)
+                    ? BuildDidWebUrl(key)
+                    : $"https://resolver-test.etda.or.th/1.0/identifiers/{key}";
+                logger.Info($"ResolveDID: resolving '{key}' via {url}");
                 // Set request headers if needed (e.g., Accept)
                 client.DefaultRequestHeaders.Accept.Clear();
                 client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
@@ -182,6 +310,14 @@ namespace VerifierAPI.Service
                 }
 
                 JsonElement? chosen = matched ?? lastSeen;
+                if (chosen == null)
+                {
+                    // FIX (silent DID-resolution failure diagnosability, 2026-08-21):
+                    // resolver returned a DID document with no verificationMethod entries
+                    // at all — not an exception, so this used to fall through and return
+                    // null with zero indication of why.
+                    logger.Info($"ResolveDID: DID document for '{key}' has no verificationMethod entries (exactKid={exactKid ?? "<none>"})");
+                }
                 if (chosen != null)
                 {
                     JsonElement publicKeyJwk = chosen.Value.GetProperty("publicKeyJwk");
@@ -202,11 +338,30 @@ namespace VerifierAPI.Service
                     {
                         publickey = x;
                     }
+
+                    if (matched == null && !string.IsNullOrEmpty(exactKid))
+                    {
+                        // exactKid was requested but nothing matched it — fell back to
+                        // lastSeen (H-06's documented fallback behavior). Worth knowing
+                        // about even though it's not a hard failure, since a Wallet/DID
+                        // document mismatch here can look identical to "resolution failed"
+                        // from the caller's side.
+                        logger.Info($"ResolveDID: no verificationMethod matched kid='{exactKid}' in DID document for '{key}' — falling back to the last-listed key");
+                    }
                 }
             }
             catch (Exception e)
             {
-                Console.WriteLine(e);
+                // FIX (silent DID-resolution failure diagnosability, 2026-08-21): was
+                // Console.WriteLine(e), which never reaches the NLog file (logs/*.log)
+                // the rest of the app's request logging goes to — a resolver timeout,
+                // DNS failure, non-2xx response (EnsureSuccessStatusCode throws
+                // HttpRequestException), or malformed DID document JSON all silently
+                // returned null with nothing in the actual application log to explain
+                // why. This is the real reason a signature verify can fail with a bare
+                // "Object reference not set to an instance of an object." further up the
+                // call chain (VerifyJWS calling Base64UrlDecode on a null key).
+                logger.Info($"ResolveDID failed for key='{key}' exactKid='{exactKid ?? "<none>"}': {e.GetType().Name}: {e.Message}");
             }
 
             return publickey;
@@ -380,7 +535,20 @@ namespace VerifierAPI.Service
                     return isValid;
                 }
 
-                // Ed25519 path — identical to the previous (only) implementation.
+                // Ed25519 path — identical to the previous (only) implementation, plus a
+                // guard for a null/empty key. FIX (silent DID-resolution failure
+                // diagnosability, 2026-08-21): previously this called
+                // Base64UrlDecode(publicKey) unguarded — if the caller's DID resolution
+                // failed and passed through a null key (see VCService.ResolveDID), this
+                // threw a bare, unhelpful NullReferenceException ("Object reference not
+                // set to an instance of an object.") deep inside Base64UrlDecode instead
+                // of a diagnosable error, matching the existing guard already present in
+                // the ES256 branch just above.
+                if (string.IsNullOrWhiteSpace(publicKey))
+                {
+                    ErrMsg = "no public key was resolved for this credential's signer (DID resolution likely failed — see ResolveDID log)";
+                    return false;
+                }
                 byte[] base64Encode = Base64UrlDecode(publicKey);
                 var key = PublicKey.Import(SignatureAlgorithm.Ed25519, base64Encode, KeyBlobFormat.RawPublicKey);
                 isValid = SignatureAlgorithm.Ed25519.Verify(key, signedData, signature);
@@ -579,6 +747,184 @@ namespace VerifierAPI.Service
 
 
             return diddoc;
+        }
+
+        private static readonly object _es256KeyLock = new object();
+
+        // FIX (H-01, 2026-08-10): dedicated ES256 (P-256) signing key for Verifier
+        // Request Objects, separate from the Ed25519 key(s) above (GetKey/
+        // GetSubKey), which the DID-based verificationMethod flow ties to
+        // Issuer-side VC/JWS signing. Generated once and persisted the same way as
+        // the existing keys (PEM file under the app's ContentRootPath) for
+        // consistency with this codebase's existing key handling — not a
+        // KMS/HSM-backed key. See OID4VP-1.0-COMPLIANCE-AUDIT.md finding H-01.
+        public ECDsa GetVerifierRequestSigningKey(IWebHostEnvironment _env)
+        {
+            lock (_es256KeyLock)
+            {
+                var client = "Verifier";
+                string privatePem = Database.Read(client, "verifierEs256Private", _env);
+                string publicPem = Database.Read(client, "verifierEs256Public", _env);
+
+                var ecdsa = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+
+                if (string.IsNullOrEmpty(privatePem) || string.IsNullOrEmpty(publicPem))
+                {
+                    ecdsa.GenerateKey(ECCurve.NamedCurves.nistP256);
+                    privatePem = ecdsa.ExportECPrivateKeyPem();
+                    publicPem = ecdsa.ExportSubjectPublicKeyInfoPem();
+
+                    Database.Write(client, "verifierEs256Private", privatePem, _env);
+                    Database.Write(client, "verifierEs256Public", publicPem, _env);
+                }
+                else
+                {
+                    ecdsa.ImportFromPem(privatePem);
+                }
+
+                return ecdsa;
+            }
+        }
+
+        // FIX (H-01, 2026-08-10): builds a `did:key` identifier for the Verifier's
+        // ES256 key, per the W3C did:key method spec — multicodec prefix for a
+        // P-256 public key (`p256-pub` = 0x1200, varint-encoded as 0x80 0x24)
+        // prepended to the SEC1-compressed EC point, then base58btc-encoded with a
+        // leading "z" (multibase). This DID is used as the `client_id` (instead of
+        // `redirect_uri:...`) per OpenID4VP §5.9.3, which states requests using the
+        // `redirect_uri` Client Identifier Prefix "cannot be signed because there
+        // is no method for the Wallet to obtain a trusted key for verification."
+        // did:key needs no resolver call — the DID itself deterministically encodes
+        // the public key — so a Wallet that supports the `did` Client Identifier
+        // Prefix and the did:key method can verify this without any network
+        // lookup. See OID4VP-1.0-COMPLIANCE-AUDIT.md finding H-01.
+        private static string BuildP256DidKeyMultibase(ECDsa ecdsa)
+        {
+            var parms = ecdsa.ExportParameters(false);
+            byte[] x = parms.Q.X;
+            byte[] y = parms.Q.Y;
+
+            // SEC1 compressed point: 0x02 if Y is even, 0x03 if Y is odd, then X.
+            byte prefix = (byte)((y[y.Length - 1] % 2 == 0) ? 0x02 : 0x03);
+            byte[] compressed = new byte[1 + x.Length];
+            compressed[0] = prefix;
+            Buffer.BlockCopy(x, 0, compressed, 1, x.Length);
+
+            byte[] multicodecPrefix = new byte[] { 0x80, 0x24 }; // p256-pub, varint-encoded
+            byte[] withPrefix = new byte[multicodecPrefix.Length + compressed.Length];
+            Buffer.BlockCopy(multicodecPrefix, 0, withPrefix, 0, multicodecPrefix.Length);
+            Buffer.BlockCopy(compressed, 0, withPrefix, multicodecPrefix.Length, compressed.Length);
+
+            return "z" + Base58.Bitcoin.Encode(withPrefix);
+        }
+
+        // The full `did:key:...` identifier for the Verifier's ES256 signing key.
+        // Used as `client_id` in both RequestURI (inside the signed Request
+        // Object) and by every caller that builds the outer by-reference
+        // client_id+request_uri pair (VerifierPresentVP, VerifierRequestService) —
+        // per RFC 9101 §5, the outer client_id query parameter MUST match the
+        // client_id inside the Request Object once dereferenced, so both must stay
+        // in sync. See OID4VP-1.0-COMPLIANCE-AUDIT.md finding H-01.
+        public string GetVerifierDid(IWebHostEnvironment _env)
+        {
+            var ecdsa = GetVerifierRequestSigningKey(_env);
+            return "did:key:" + BuildP256DidKeyMultibase(ecdsa);
+        }
+
+        // FIX (H-01, 2026-08-10) — CORRECTED: the OpenID4VP 1.0 (final) Client
+        // Identifier Prefix for a DID-bound client_id is named
+        // `decentralized_identifier`, not `did` — confirmed against the published
+        // spec text (§5.9.3): "Example Client Identifier:
+        // `decentralized_identifier:did:example:123`." A bare DID with no prefix
+        // (what earlier code here used) matches none of the spec's defined
+        // Client Identifier Prefixes, which is almost certainly why a real Wallet
+        // rejected it with a version-inference error ("Could not infer openid4vp
+        // version..."). The `kid` in the signed JWT header stays as the bare
+        // `did:key:...#...` (unprefixed) — only client_id gets the
+        // `decentralized_identifier:` prefix, matching the spec's own example
+        // header/body pair (`"kid": "did:example:123#1"` alongside
+        // `"client_id": "decentralized_identifier:did:example:123"`).
+        //
+        // SWITCHED BACK 2026-08-11: briefly used the Ed25519 did:key (_GetDID)
+        // instead of this P-256 one (2026-08-10, in response to a Wallet JWT
+        // verification failure). Per explicit instruction, reverted back to
+        // ES256/P-256 (GetVerifierDid) here. IMPORTANT: the earlier P-256 failure
+        // ("Error during verification of jwt") coincided with an unrelated bug —
+        // an intermediate edit left `kid` pointing at a different DID than
+        // `client_id` (see SignRequestObject's old comment / RequestURI's
+        // comment) — which alone guarantees a verification failure regardless of
+        // curve. That mismatch has since been fixed, so it is not yet known
+        // whether ES256/P-256 itself was ever actually broken for the target
+        // Wallet; this revert has not been re-tested live. If ES256 fails again
+        // with a *different* error than before, the P-256 curve-support
+        // hypothesis becomes more likely.
+        // See OID4VP-1.0-COMPLIANCE-AUDIT.md finding H-01.
+        public string GetVerifierClientId(IWebHostEnvironment _env)
+        {
+            return "decentralized_identifier:" + GetVerifierDid(_env);
+        }
+
+        // UNUSED as of 2026-08-11 (switched back to SignRequestObjectES256 below,
+        // per explicit instruction to revert client_id/kid to ES256). Left in
+        // place — this Ed25519 path worked in code review but was never
+        // confirmed against a live Wallet before the revert. See
+        // SignRequestObjectES256 below for the currently-active signer.
+        // See OID4VP-1.0-COMPLIANCE-AUDIT.md finding H-01.
+        public string SignRequestObject(object payloadObj, IWebHostEnvironment _env)
+        {
+            string did = _GetDID(_env);
+            string multibase = did.Substring("did:key:".Length);
+            string kid = $"{did}#{multibase}";
+
+            string privateKeyPem = GetKey(true, _env);
+            var pemReader = new PemReader(new StringReader(privateKeyPem));
+            var privateKeyEd25519 = (Ed25519PrivateKeyParameters)pemReader.ReadObject();
+
+            var headerObj = new { alg = "EdDSA", typ = "oauth-authz-req+jwt", kid = kid };
+            string headerJson = JsonConvert.SerializeObject(headerObj);
+            string payloadJson = JsonConvert.SerializeObject(payloadObj);
+            string headerB64 = WebEncoders.Base64UrlEncode(Encoding.UTF8.GetBytes(headerJson));
+            string payloadB64 = WebEncoders.Base64UrlEncode(Encoding.UTF8.GetBytes(payloadJson));
+            string signingInput = $"{headerB64}.{payloadB64}";
+
+            var signer = new Ed25519Signer();
+            signer.Init(true, privateKeyEd25519);
+            byte[] signingBytes = Encoding.UTF8.GetBytes(signingInput);
+            signer.BlockUpdate(signingBytes, 0, signingBytes.Length);
+            byte[] signature = signer.GenerateSignature();
+            string sigB64 = WebEncoders.Base64UrlEncode(signature);
+
+            return $"{signingInput}.{sigB64}";
+        }
+
+        // Signs an OpenID4VP Request Object with the Verifier's own ES256 key —
+        // UNUSED as of 2026-08-10, see SignRequestObject above for why signing
+        // switched to Ed25519. Left in place in case P-256 is revisited. `kid` is
+        // the did:key verificationMethod id (`<did>#<multibase>`), the standard
+        // convention a did:key resolver expects. Uses the same raw r||s
+        // (IeeeP1363FixedFieldConcatenation) signature format that VerifyJWS's
+        // ES256 verification path already expects elsewhere in this file, so the
+        // signature format is consistent across sign and verify in this codebase.
+        // See OID4VP-1.0-COMPLIANCE-AUDIT.md finding H-01.
+        public string SignRequestObjectES256(object payloadObj, IWebHostEnvironment _env)
+        {
+            var ecdsa = GetVerifierRequestSigningKey(_env);
+            string multibase = BuildP256DidKeyMultibase(ecdsa);
+            string did = "did:key:" + multibase;
+            string kid = $"{did}#{multibase}";
+
+            var headerObj = new { alg = "ES256", typ = "oauth-authz-req+jwt", kid = kid };
+            string headerJson = JsonConvert.SerializeObject(headerObj);
+            string payloadJson = JsonConvert.SerializeObject(payloadObj);
+            string headerB64 = WebEncoders.Base64UrlEncode(Encoding.UTF8.GetBytes(headerJson));
+            string payloadB64 = WebEncoders.Base64UrlEncode(Encoding.UTF8.GetBytes(payloadJson));
+            string signingInput = $"{headerB64}.{payloadB64}";
+            byte[] signature = ecdsa.SignData(
+                Encoding.UTF8.GetBytes(signingInput),
+                HashAlgorithmName.SHA256,
+                DSASignatureFormat.IeeeP1363FixedFieldConcatenation);
+            string sigB64 = WebEncoders.Base64UrlEncode(signature);
+            return $"{signingInput}.{sigB64}";
         }
 
 
@@ -1006,16 +1352,50 @@ namespace VerifierAPI.Service
 
                 // 2. Holder confirmation key is required — this deployment does not
                 // accept SD-JWT VCs that cannot prove holder binding.
+                // FIX (H-01 follow-up, 2026-08-11): this used to always treat
+                // cnf.jwk.x as a raw Ed25519/OKP public key, so an EC/P-256
+                // cnf.jwk (kty="EC", crv="P-256", separate x/y coordinates) was
+                // silently reduced to just its x coordinate and passed to
+                // VerifyJWS, which requires a {"crv","x","y"} JSON blob to take
+                // its ES256 path (see VerifyJWS's Es256KeyMaterial dispatch
+                // above) — that mismatch made every EC/P-256 holder key fail
+                // KB-JWT signature verification. Now branches on cnf.jwk.kty/crv
+                // and builds the JSON blob VerifyJWS expects for EC/P-256 keys,
+                // keeping the raw-x path for Ed25519/OKP keys unchanged.
                 if (!root.TryGetProperty("cnf", out var cnfElement) ||
                     !cnfElement.TryGetProperty("jwk", out var jwkElement) ||
                     !jwkElement.TryGetProperty("x", out var xElement) ||
                     string.IsNullOrEmpty(xElement.GetString()))
                 {
                     result.ErrorCode = "missing_holder_binding_key";
-                    result.ErrorMessage = "Credential has no usable cnf.jwk.x (only Ed25519/OKP holder keys are supported)";
+                    result.ErrorMessage = "Credential has no usable cnf.jwk.x";
                     return result;
                 }
-                string holderPublicKey = xElement.GetString();
+
+                string holderKty = jwkElement.TryGetProperty("kty", out var ktyEl) ? ktyEl.GetString() : null;
+                string holderCrv = jwkElement.TryGetProperty("crv", out var crvEl) ? crvEl.GetString() : null;
+                string holderPublicKey;
+                if (string.Equals(holderKty, "EC", StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(holderCrv, "P-256", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!jwkElement.TryGetProperty("y", out var yElement) || string.IsNullOrEmpty(yElement.GetString()))
+                    {
+                        result.ErrorCode = "missing_holder_binding_key";
+                        result.ErrorMessage = "Credential cnf.jwk is EC/P-256 but has no y coordinate";
+                        return result;
+                    }
+                    holderPublicKey = JsonConvert.SerializeObject(new
+                    {
+                        crv = "P-256",
+                        x = xElement.GetString(),
+                        y = yElement.GetString()
+                    });
+                }
+                else
+                {
+                    // Ed25519/OKP holder key — raw base64url x value, as before.
+                    holderPublicKey = xElement.GetString();
+                }
 
                 // 3. Every disclosed claim's digest must be present in the signed _sd
                 string sdAlg = root.TryGetProperty("_sd_alg", out var algEl) && !string.IsNullOrEmpty(algEl.GetString())
@@ -1292,6 +1672,22 @@ namespace VerifierAPI.Service
                             return false;
                         }
                     }
+
+                    // FIX (H-01 follow-up / NFC-mdoc support, 2026-08-11): mso_mdoc
+                    // uses `doctype_value` (a single string, OpenID4VP Appendix
+                    // B.2.3) rather than type_values/vct_values — compare the
+                    // mdoc's actual docType against it the same way.
+                    if (string.Equals(actualFormat, "mso_mdoc", StringComparison.OrdinalIgnoreCase) &&
+                        meta.TryGetProperty("doctype_value", out var doctypeValueEl))
+                    {
+                        string expectedDoctype = doctypeValueEl.GetString();
+                        if (!string.IsNullOrEmpty(expectedDoctype) &&
+                            !string.Equals(expectedDoctype, actualTypeOrVct, StringComparison.Ordinal))
+                        {
+                            errorCode = "unexpected_credential_type";
+                            return false;
+                        }
+                    }
                 }
 
                 return true;
@@ -1389,7 +1785,46 @@ namespace VerifierAPI.Service
                 };
             }
 
-            // jwt_vc_json ใช้ type_values
+            // FIX (H-01 follow-up / NFC-mdoc support, 2026-08-11): mso_mdoc
+            // (ISO/IEC 18013-5 mdoc, OpenID4VP Appendix B.2) uses a single
+            // `doctype_value` string in `meta` (Appendix B.2.3) rather than
+            // type_values/vct_values. Reuses the existing VcType column (already
+            // JSON-array-of-strings) and takes its first element as the ISO
+            // doctype identifier, matching how VcType is otherwise used for
+            // jwt_vc_json's type_values below. `claims` is intentionally omitted
+            // (requests the whole credential) — mdoc's Claims Query paths are
+            // [NameSpace, DataElementIdentifier] pairs, a different shape from
+            // the JSON-path claims this deployment's existing document types use
+            // (GetClaimsByDocType), and no mdoc document type has been configured
+            // with claim-level restrictions yet.
+            // See OID4VP-1.0-COMPLIANCE-AUDIT.md finding H-01.
+            if (format == "mso_mdoc")
+            {
+                string doctypeValue = vcTypes.Length > 0 ? vcTypes[0] : docType.DocType;
+                return new
+                {
+                    credentials = new[]
+                    {
+                        new
+                        {
+                            id     = docType.DocType,
+                            format = format,
+                            meta   = new
+                            {
+                                doctype_value = doctypeValue
+                            }
+                        }
+                    }
+                };
+            }
+
+            // FIX (H-02, 2026-08-09): OpenID4VP requires type_values to be a
+            // non-empty array of non-empty string arrays (Appendix B.1.1) — each
+            // inner array is one full acceptable credential `type`/`@type` set, not
+            // a single type string. This used to emit `["IDCardCredential"]`
+            // (missing "VerifiableCredential" and wrapped one level too shallow);
+            // now emits `[["VerifiableCredential","IDCardCredential"]]`.
+            // See OID4VP-1.0-COMPLIANCE-AUDIT.md finding H-02.
             return new
             {
                 credentials = new[]
@@ -1400,7 +1835,7 @@ namespace VerifierAPI.Service
                         format = format,
                         meta   = new
                         {
-                            type_values = new[] { vcTypes.LastOrDefault() }
+                            type_values = new[] { vcTypes }
                         }
                     }
                 }
@@ -1466,7 +1901,10 @@ namespace VerifierAPI.Service
                         format = format,
                         meta   = new
                         {
-                            type_values = new[] { vcTypes.LastOrDefault() }
+                            // FIX (H-02, 2026-08-09): see the other BuildDcqlQuery
+                            // overload above — type_values must be an array of
+                            // string arrays, not an array of one string.
+                            type_values = new[] { vcTypes }
                         },
                         // เพิ่มบรรทัดนี้ — เดิมไม่มี claims เลยใน branch นี้
                         claims = GetClaimsByDocType(dbType.DocType)
@@ -1486,7 +1924,7 @@ namespace VerifierAPI.Service
                     new { path = new[] { "full_name"    } },
                     new { path = new[] { "birthdate"    } },
                     new { path = new[] { "expiry_date"  } },
-                    new { path = new[] { "religion"     } }
+                    //new { path = new[] { "religion"     } }
                    // new { path = new[] { "photo"        } }
                 },
 
@@ -1503,14 +1941,27 @@ namespace VerifierAPI.Service
                 },
 
                 // ✅ Driver License
+                // FIX (claim-name mismatch, 2026-08-19): these paths previously used
+                // made-up flat names (license_number/givenname/familyname/birthdate/
+                // license_class/portrait, and before that full_name/license_type/photo)
+                // that do not match any claim this Issuer actually discloses. A dc+sd-jwt
+                // DCQL `claims` entry must name the exact top-level disclosure keys in the
+                // credential (OpenID4VP §6.1 claims_query / DCQL processing rules, §6.4) —
+                // a Wallet cannot satisfy a query for claims that don't exist in the
+                // credential. Renamed to match this Issuer's 9 disclosures exactly:
+                // family_name, given_name, birth_date, document_number, issue_date,
+                // expiry_date, resident_address, driving_privileges, portrait.
                 "driverlicense_credential" => new object[]
                 {
-            new { path = new[] { "license_number" } },
-            new { path = new[] { "full_name"      } },
-            new { path = new[] { "birthdate"      } },
-            new { path = new[] { "license_type"   } },
-            new { path = new[] { "expiry_date"    } },
-            new { path = new[] { "photo"          } }
+                    new { path = new[] { "family_name"        } },
+                    new { path = new[] { "given_name"         } },
+                    new { path = new[] { "birth_date"         } },
+                    new { path = new[] { "document_number"    } },
+                    new { path = new[] { "issue_date"         } },
+                    new { path = new[] { "expiry_date"        } },
+                    new { path = new[] { "resident_address"   } },
+                    new { path = new[] { "driving_privileges" } },
+                    //new { path = new[] { "portrait"           } }
                 },
 
                 // Default — ไม่รู้จัก docType ส่ง empty (ขอทั้งหมด)

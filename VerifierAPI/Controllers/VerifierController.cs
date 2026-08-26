@@ -2,6 +2,7 @@
 using Microsoft.AspNetCore.Http.Extensions;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.WebUtilities;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using NLog;
@@ -9,9 +10,11 @@ using Org.BouncyCastle.Asn1.Ocsp;
 using Org.BouncyCastle.Utilities;
 using System;
 using System.Net;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using VerifierAPI.Databases;
+using VerifierAPI.Filters;
 using VerifierAPI.Models;
 using VerifierAPI.Service;
 
@@ -25,33 +28,67 @@ namespace VerifierAPI.Controllers
         private readonly ILogger<VerifierController> _logger;
         private static readonly Logger logger = LogManager.GetCurrentClassLogger();
         private string baseUrl = Environment.GetEnvironmentVariable("INTERNAL_BASE_URL");
-            
+        // FIX (H-01, 2026-08-10): needed to read/persist the Verifier's ES256
+        // Request Object signing key (see VCService.GetVerifierRequestSigningKey),
+        // which is stored as a PEM file under ContentRootPath, same pattern as the
+        // existing Ed25519 key(s).
+        private readonly IWebHostEnvironment _env;
 
-        public VerifierController(ILogger<VerifierController> logger)
+
+        public VerifierController(ILogger<VerifierController> logger, IWebHostEnvironment env)
         {
             _logger = logger;
+            _env = env;
         }
 
         // FIX (M-08, 2026-08-09): removed a commented-out earlier version of
         // VerifierPresentVP (superseded by the active version below, which adds
         // URL-encoding and the same-device deeplink). See M-08 in the audit.
 
+        // FIX (H-01, 2026-08-09) — SUPERSEDED 2026-08-10: an earlier version of this
+        // method embedded the full authorization request (dcql_query +
+        // client_metadata as URL-encoded JSON, in addition to the other params)
+        // directly into the QR-encoded URI, to avoid the Wallet dereferencing
+        // RequestURI and getting back an unsecured (alg:none) Request Object.
+        // That worked, but produced a QR code dense enough to be unreliable to
+        // scan in practice.
+        //
+        // RequestURI signs its Request Object with the Verifier's own key (as of
+        // 2026-08-11, ES256/P-256 — see VCService.SignRequestObjectES256 /
+        // GetVerifierDid, finding H-01; briefly Ed25519 on 2026-08-10, reverted
+        // per explicit instruction), so there's no reason to avoid the
+        // by-reference request_uri form — it's small (just client_id +
+        // request_uri) *and* secure. This also means the direct-QR flow and the
+        // broker-relay flow (VerifierScanController/VerifierRequestService)
+        // share the exact same signed Request Object logic instead of diverging.
+        //
+        // FIX (H-01, 2026-08-10) — CORRECTED: client_id here is now
+        // `decentralized_identifier:did:key:...` (VCService.GetVerifierClientId),
+        // not `redirect_uri:...` — per OpenID4VP §5.9.3, "requests using the
+        // redirect_uri Client Identifier Prefix cannot be signed because there is
+        // no method for the Wallet to obtain a trusted key for verification." An
+        // earlier version of this fix used the bare DID with no prefix at all
+        // (matches no defined Client Identifier Prefix — corrected after a real
+        // Wallet rejected it with a version-inference error).
+        // Per RFC 9101 §5, this outer client_id MUST match the client_id inside
+        // the Request Object once the Wallet dereferences request_uri, so this
+        // must stay in sync with what RequestURI puts in the signed payload.
+        // See OID4VP-1.0-COMPLIANCE-AUDIT.md finding H-01.
         [Route("/generate-vp-qr")]
         [HttpPost]
         public IActionResult VerifierPresentVP([FromBody] GenerateVpQrRequest docType)
         {
             VCService vcServ = new VCService();
             DBService dbServ = new DBService();
-            VpRequestSession model = new VpRequestSession();
 
             baseUrl = Environment.GetEnvironmentVariable("INTERNAL_BASE_URL")
               ?? $"{Request.Scheme}://{Request.Host}";
-            model = dbServ.SaveVerifierSession(docType.DocumentType.ToString());
+            VpRequestSession model = dbServ.SaveVerifierSession(docType.DocumentType.ToString());
             string nonce = model.nonce;
             string stateid = model.stateId;
 
             string request_uri = $"{baseUrl}/openid4vc/request/{stateid}";
-            string clientId = $"redirect_uri:{baseUrl}/openid4vc/verify/{stateid}";
+            string clientId = vcServ.GetVerifierClientId(_env);
 
             // สำคัญ: ต้อง URL-encode ค่าที่มี :, /, & ปนอยู่ ไม่งั้น Wallet parse query string ผิด
             // (ตรงกับตัวอย่างในสเปก client_id=redirect_uri%3Ahttps%3A%2F%2F...)
@@ -80,12 +117,100 @@ namespace VerifierAPI.Controllers
             return Ok(response);
         }
 
+        // FIX (H-01/H-03, 2026-08-09): shared client_metadata builder used by both
+        // VerifierPresentVP (direct-encoded request) and RequestURI. Kept as one
+        // place so the H-03 format-specific alg field-name fix doesn't have to be
+        // duplicated and drift between the two.
+        // (2026-08-10: this briefly took an optional jwksUri parameter while
+        // RequestURI signed with ES256 — reverted, see RequestURI's comment below.)
+        private object BuildClientMetadata(Dbdocumenttype docType)
+        {
+            var algValues = JsonConvert.DeserializeObject<string[]>(docType.AlgValues);
+            bool isSdJwtFormat = string.Equals(docType.Format, "dc+sd-jwt", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(docType.Format, "vc+sd-jwt", StringComparison.OrdinalIgnoreCase);
+            bool isMdocFormat = string.Equals(docType.Format, "mso_mdoc", StringComparison.OrdinalIgnoreCase);
+            // FIX (H-01 follow-up / NFC-mdoc support, 2026-08-11): mso_mdoc's
+            // vp_formats_supported entry uses issuerauth_alg_values/
+            // deviceauth_alg_values (OpenID4VP Appendix B.2.2), not alg_values —
+            // -7 is the COSE identifier for ES256, the only IssuerAuth/DeviceAuth
+            // algorithm this deployment's mdoc verifier (MdocService) supports.
+            // See OID4VP-1.0-COMPLIANCE-AUDIT.md finding H-01.
+            object formatMetadata = isSdJwtFormat
+                ? new Dictionary<string, object>
+                    {
+                        ["sd-jwt_alg_values"] = algValues,
+                        ["kb-jwt_alg_values"] = new[] { "EdDSA", "ES256" }
+                    }
+                : isMdocFormat
+                ? new Dictionary<string, object>
+                    {
+                        ["issuerauth_alg_values"] = new[] { -7 },
+                        ["deviceauth_alg_values"] = new[] { -7 }
+                    }
+                : new { alg_values = algValues };
+
+            return new
+            {
+                vp_formats_supported = new Dictionary<string, object>
+                {
+                    [docType.Format] = formatMetadata
+                }
+            };
+        }
+
         // FIX (M-08, 2026-08-09): removed three unused private methods
         // (BuildDcqlQuery(DocumentType), BuildPresentationDefinition(Dbdocumenttype),
         // BuildDcqlQuery(string)) — none were called anywhere; the active DCQL
         // builder is VCService.BuildDcqlQuery(Dbdocumenttype, HttpRequest), used
         // below in RequestURI. See OID4VP-1.0-COMPLIANCE-AUDIT.md finding M-08.
 
+        // FIX (H-01, 2026-08-09/2026-08-10): both the direct-QR flow
+        // (VerifierPresentVP, above) and the broker-relay flow
+        // (VerifierRequestService.HandleQrScanAsync, reached via
+        // VerifierScanController) reach this endpoint by reference
+        // (client_id+request_uri).
+        //
+        // The Request Object served here is signed — this stops in-transit
+        // tampering with the request (e.g. rewriting response_uri to redirect a
+        // VP presentation to an attacker). Signed with the Verifier's ES256/P-256
+        // did:key (VCService.SignRequestObjectES256 / GetVerifierRequestSigningKey)
+        // as of 2026-08-11, per explicit instruction to switch client_id and kid
+        // back to ES256. Briefly Ed25519 (VCService.SignRequestObject / _GetDID,
+        // still defined but unused) on 2026-08-10, after a real Wallet failed to
+        // verify the P-256 signature — but that failure coincided with a
+        // client_id/kid DID-mismatch bug (see below) that alone would guarantee
+        // a verification failure, so it's not yet confirmed the P-256 curve
+        // itself was ever actually the problem. This revert has not been
+        // re-tested against a live Wallet.
+        //
+        // client_id is `decentralized_identifier:did:key:...` (not
+        // `redirect_uri:...`) — per OpenID4VP §5.9.3, requests using the
+        // `redirect_uri` Client Identifier Prefix "cannot be signed because there
+        // is no method for the Wallet to obtain a trusted key for verification."
+        // An earlier version used the bare DID with no prefix at all — that
+        // matches none of the spec's defined Client Identifier Prefixes and was
+        // rejected by a real Wallet with a version-inference error ("Could not
+        // infer openid4vp version..."). The correct prefix name, confirmed
+        // against the published spec text, is `decentralized_identifier`
+        // (example in §5.9.3: `"client_id":
+        // "decentralized_identifier:did:example:123"`) — not `did`.
+        // did:key needs no resolver call (the DID deterministically encodes the
+        // public key), so a Wallet supporting the `decentralized_identifier`
+        // Client Identifier Prefix and the did:key method can verify this Request
+        // Object without any network lookup for the Verifier's key.
+        //
+        // IMPORTANT: `kid` in the signed JWT header and `client_id` must resolve
+        // to the SAME DID — an earlier intermediate state during this debugging
+        // session had client_id already switched to a new DID while the signing
+        // call still used the old key/DID for `kid`, which is a guaranteed
+        // verification failure (Wallet resolves the wrong key entirely). Both
+        // GetVerifierClientId and SignRequestObjectES256 now derive from the same
+        // GetVerifierDid (P-256) identity — keep it that way if this is touched
+        // again.
+        //
+        // UNVERIFIED: this ES256/P-256 revert has not yet been re-tested against
+        // a real Wallet as of this comment.
+        // See OID4VP-1.0-COMPLIANCE-AUDIT.md finding H-01.
         [Route("request/{id}")]
         [HttpGet]
         public async Task<IActionResult> RequestURI(string id)
@@ -128,7 +253,13 @@ namespace VerifierAPI.Controllers
                 return NotFound();
             }
             string nonce = session.Nonce;
-            string clientId = $"redirect_uri:{baseUrl}/openid4vc/verify/{stateid}";
+            // FIX (H-01, 2026-08-10) — CORRECTED: client_id is now
+            // `decentralized_identifier:did:key:...` — see this method's leading
+            // comment for the correction from a bare (unprefixed) DID. response_uri
+            // is still sent explicitly below since, unlike the redirect_uri Client
+            // Identifier Prefix, a decentralized_identifier: client_id does not
+            // implicitly carry it.
+            string clientId = vcServ.GetVerifierClientId(_env);
             session.ClientId = clientId;
 
             // FIX (Phase 1 item 2, 2026-08-09): persist the exact DCQL query issued
@@ -139,15 +270,10 @@ namespace VerifierAPI.Controllers
             session.DcqlQuery = JsonConvert.SerializeObject(dcqlQueryObj);
             context.SaveChanges();
 
-            // Build client_metadata จาก DB
-            var algValues = JsonConvert.DeserializeObject<string[]>(docType.AlgValues);
-            var clientMetadata = new
-            {
-                vp_formats_supported = new Dictionary<string, object>
-                {
-                    [docType.Format] = new { alg_values = algValues }
-                }
-            };
+            // FIX (H-03, 2026-08-09): see BuildClientMetadata above — SD-JWT formats
+            // need sd-jwt_alg_values/kb-jwt_alg_values, not the generic alg_values
+            // shape. See OID4VP-1.0-COMPLIANCE-AUDIT.md finding H-03.
+            var clientMetadata = BuildClientMetadata(docType);
 
             var payloadObj = new
             {
@@ -161,10 +287,18 @@ namespace VerifierAPI.Controllers
                 response_uri = $"{baseUrl}/openid4vc/verify/{stateid}"
             };
 
-            // แปลงเป็น Unsecured JWT (alg: none)
-            var header = Base64UrlEncode("""{"alg":"none","typ":"oauth-authz-req+jwt"}""");
-            var payload = Base64UrlEncode(JsonConvert.SerializeObject(payloadObj));
-            var jwt = $"{header}.{payload}.";
+            // FIX (H-01, 2026-08-11) — SWITCHED BACK to ES256/P-256, per explicit
+            // instruction: sign with the Verifier's ES256/P-256 did:key (kid =
+            // did:key verificationMethod id) instead of the Ed25519 key used
+            // briefly on 2026-08-10 — see this method's leading comment. Uses the
+            // same GetVerifierDid (P-256) identity as GetVerifierClientId above
+            // so kid and client_id agree on the same DID (a prior intermediate
+            // state signed with a different key than client_id pointed at —
+            // mismatched, and the direct cause of a "Error during verification of
+            // jwt" failure; that bug is now fixed, but this ES256 revert has not
+            // itself been re-tested live).
+            // See OID4VP-1.0-COMPLIANCE-AUDIT.md finding H-01.
+            var jwt = vcServ.SignRequestObjectES256(payloadObj, _env);
 
             return Content(jwt, "application/oauth-authz-req+jwt");
 
@@ -191,9 +325,16 @@ namespace VerifierAPI.Controllers
                 .TrimEnd('=');
         }
 
+        // NOTE (H-01): no /jwks endpoint exists here — the Verifier's ES256/P-256
+        // key is verified via did:key (the DID self-encodes the public key, see
+        // VCService.GetVerifierDid), so there's no JWKS to serve.
 
         [Route("verify/{id}")]
         [HttpPost]
+        // FEATURE (audit trail, 2026-08-15): see VerifierAuditLogFilter for why
+        // this is a post-action filter rather than instrumenting this method's
+        // ~15 return points directly.
+        [TypeFilter(typeof(VerifierAuditLogFilter))]
         public async Task<IActionResult> VerifierVP(
             [FromForm] string? vp_token,
             [FromForm] string state,
@@ -206,7 +347,20 @@ namespace VerifierAPI.Controllers
             // below. See OID4VP-1.0-COMPLIANCE-AUDIT.md finding M-01.
             [FromForm] string? error = null,
             [FromForm] string? error_description = null,
-            [FromForm] string? error_uri = null)//[FromForm] string presentation_submission,)
+            [FromForm] string? error_uri = null,
+            // FIX (H-01 follow-up / NFC-mdoc support, 2026-08-11): standard
+            // OpenID4VP direct_post has no slot for the ISO 18013-5 proximity
+            // engagement material (DeviceEngagement/EReaderKey/NFC Handover)
+            // that MdocService.VerifyMdocPresentation needs to reconstruct the
+            // real SessionTranscript for a genuine NFC proximity session — these
+            // are deployment-specific extra form fields the reader app backend
+            // must submit alongside vp_token, base64url-encoded, whenever
+            // vp_token is an mso_mdoc DeviceResponse. Not used by any other
+            // format. See OID4VP-1.0-COMPLIANCE-AUDIT.md finding H-01.
+            [FromForm] string? device_engagement = null,
+            [FromForm] string? e_reader_key = null,
+            [FromForm] string? handover_select = null,
+            [FromForm] string? handover_request = null)//[FromForm] string presentation_submission,)
         {
 
             VCService vpServ = new VCService();
@@ -234,7 +388,7 @@ namespace VerifierAPI.Controllers
             {
                 return BadRequest(new
                 {
-                    error = "invalid_request",
+                    error = "invalid_request context",
                     error_description = "Present VP is invalid"
                 });
             }
@@ -242,7 +396,7 @@ namespace VerifierAPI.Controllers
             {
                 return BadRequest(new
                 {
-                    error = "invalid_request",
+                    error = "invalid_request session",
                     error_description = "Unknown session"
                 });
             }
@@ -250,7 +404,7 @@ namespace VerifierAPI.Controllers
             {
                 return BadRequest(new
                 {
-                    error = "invalid_request",
+                    error = "invalid_request expire",
                     error_description = "Session has expired"
                 });
             }
@@ -259,9 +413,40 @@ namespace VerifierAPI.Controllers
                 logger.Info("Rejected: session already consumed (replay attempt)");
                 return BadRequest(new
                 {
-                    error = "invalid_request",
+                    error = "invalid_request reject",
                     error_description = "This session has already been used"
                 });
+            }
+
+            // FIX (M-04 remediation, 2026-08-23): every verify-failure return point in
+            // this method used to leave the session sitting at "Pending" forever (until
+            // its 10-minute expiry) — only this Wallet-error-response path (just below)
+            // ever set session.Status = "Failed". A presentation that failed
+            // cryptographic/DCQL verification (bad signature, wrong credential,
+            // nonce/aud mismatch, etc.) was therefore indistinguishable from "Wallet
+            // hasn't responded yet" to a caller polling status: GetScanStatus
+            // (VerifierScanController) infers status purely from whether a
+            // Dbverifierresponse row exists, and no row is ever written for a failed
+            // verification. Centralizing "mark this session Failed, then return the
+            // failure body" here means every one of this method's ~15 failure returns
+            // does it consistently, instead of repeating the
+            // set-fields/try/SaveChanges/catch block at each site (or, as before,
+            // omitting it entirely everywhere except this one path).
+            // See OID4VP-1.0-COMPLIANCE-AUDIT.md finding M-04.
+            IActionResult FailSession(object body)
+            {
+                try
+                {
+                    session.Status = "Failed";
+                    session.CompletedAt = DateTime.UtcNow;
+                    context.SaveChanges();
+                }
+                catch (Exception)
+                {
+                    // best-effort — still return the failure body below even if this
+                    // write fails.
+                }
+                return BadRequest(body);
             }
 
             // FIX (M-01, 2026-08-09): a Wallet Authorization Error Response — the
@@ -274,18 +459,7 @@ namespace VerifierAPI.Controllers
             if (!string.IsNullOrEmpty(error))
             {
                 logger.Info($"Wallet returned an Authorization Error Response: {error}");
-                try
-                {
-                    session.Status = "Failed";
-                    session.CompletedAt = DateTime.UtcNow;
-                    context.SaveChanges();
-                }
-                catch (Exception)
-                {
-                    // best-effort — still report the Wallet's error below even if
-                    // this write fails
-                }
-                return BadRequest(new
+                return FailSession(new
                 {
                     error,
                     error_description = error_description ?? "Wallet returned an authorization error"
@@ -294,7 +468,7 @@ namespace VerifierAPI.Controllers
 
             if (string.IsNullOrEmpty(vp_token))
             {
-                return BadRequest(new
+                return FailSession(new
                 {
                     error = "invalid_request",
                     error_description = "Missing vp_token"
@@ -307,9 +481,14 @@ namespace VerifierAPI.Controllers
             // instead of silently accepting whatever alg the token declares.
             // See OID4VP-1.0-COMPLIANCE-AUDIT.md Phase 1 item 6 / H-05.
             string[] permittedAlgs = null;
+            // FIX (H-01 follow-up / NFC-mdoc support, 2026-08-11): hoisted out of
+            // the try block below so it's also available to route mso_mdoc
+            // presentations to MdocService instead of the JWT/SD-JWT logic
+            // further down. See OID4VP-1.0-COMPLIANCE-AUDIT.md finding H-01.
+            Dbdocumenttype docTypeForAlg = null;
             try
             {
-                var docTypeForAlg = context.Dbdocumenttypes.Where(d => d.TypeId == session.DocTypeId).FirstOrDefault();
+                docTypeForAlg = context.Dbdocumenttypes.Where(d => d.TypeId == session.DocTypeId).FirstOrDefault();
                 if (!string.IsNullOrEmpty(docTypeForAlg?.AlgValues))
                 {
                     permittedAlgs = JsonConvert.DeserializeObject<string[]>(docTypeForAlg.AlgValues);
@@ -324,8 +503,78 @@ namespace VerifierAPI.Controllers
             {
 
                 logger.Info("VerifierVP: request received");
-                // ✅ เพิ่มตรงนี้ — แก้ vp_token ถ้าเป็น JSON array
-                if (!string.IsNullOrEmpty(vp_token) && vp_token.TrimStart().StartsWith("["))
+
+                // FIX (C-01, 2026-08-09): the final OpenID4VP 1.0 vp_token shape
+                // (§8) for a DCQL response is a JSON object mapping each DCQL
+                // credential query id to an array of credential strings, e.g.
+                // {"transcript_credential": ["<jwt-or-sd-jwt>"]} — not a bare JWS
+                // string or a legacy bare JSON array. A conforming Wallet's response
+                // could not be parsed before this. Uses the DCQL query id stored on
+                // the session (Phase 1 item 2) to pick the right entry when present;
+                // falls back to the first property otherwise. The legacy bare-array
+                // and bare-JWS shapes below are still accepted for now so older
+                // Wallet builds in the current test environment keep working.
+                // See OID4VP-1.0-COMPLIANCE-AUDIT.md finding C-01.
+                if (!string.IsNullOrEmpty(vp_token) && vp_token.TrimStart().StartsWith("{"))
+                {
+                    try
+                    {
+                        using var vpTokenDoc = System.Text.Json.JsonDocument.Parse(vp_token);
+                        System.Text.Json.JsonElement root = vpTokenDoc.RootElement;
+
+                        string credentialQueryId = null;
+                        try
+                        {
+                            if (!string.IsNullOrEmpty(session.DcqlQuery))
+                            {
+                                using var dcqlDoc = System.Text.Json.JsonDocument.Parse(session.DcqlQuery);
+                                if (dcqlDoc.RootElement.TryGetProperty("credentials", out var credsEl) && credsEl.GetArrayLength() > 0)
+                                {
+                                    var firstCred = credsEl.EnumerateArray().First();
+                                    if (firstCred.TryGetProperty("id", out var idEl))
+                                        credentialQueryId = idEl.GetString();
+                                }
+                            }
+                        }
+                        catch
+                        {
+                            credentialQueryId = null; // fall back to first-property below
+                        }
+
+                        System.Text.Json.JsonElement? matchedArray = null;
+                        if (!string.IsNullOrEmpty(credentialQueryId) && root.TryGetProperty(credentialQueryId, out var exact))
+                        {
+                            matchedArray = exact;
+                        }
+                        else
+                        {
+                            foreach (var prop in root.EnumerateObject())
+                            {
+                                matchedArray = prop.Value;
+                                break;
+                            }
+                        }
+
+                        if (matchedArray is System.Text.Json.JsonElement arrEl &&
+                            arrEl.ValueKind == System.Text.Json.JsonValueKind.Array &&
+                            arrEl.GetArrayLength() > 0)
+                        {
+                            var first = arrEl.EnumerateArray().First();
+                            if (first.ValueKind == System.Text.Json.JsonValueKind.String)
+                            {
+                                vp_token = first.GetString();
+                                logger.Info("vp_token extracted from final OpenID4VP JSON object shape");
+                            }
+                        }
+                    }
+                    catch
+                    {
+                        logger.Info("vp_token JSON object parse failed");
+                    }
+                }
+                // Legacy bare JSON array shape (pre-final draft) — kept for backward
+                // compatibility alongside the final shape above.
+                else if (!string.IsNullOrEmpty(vp_token) && vp_token.TrimStart().StartsWith("["))
                 {
                     try
                     {
@@ -340,6 +589,113 @@ namespace VerifierAPI.Controllers
                 }
 
                 vpTokenForResolve = vp_token?.Trim();
+
+                // FIX (H-01 follow-up / NFC-mdoc support, 2026-08-11): mso_mdoc
+                // credentials (ISO 18013-5 DeviceResponse, base64url-encoded CBOR
+                // per OpenID4VP Appendix B.2) are a completely different encoding
+                // from the JWT/SD-JWT paths below (CBOR/COSE_Sign1, not JWS) —
+                // route to the dedicated CBOR/COSE verifier (MdocService) instead
+                // of treating vpTokenForResolve as a JWS. Routed by this
+                // session's configured document type/format (persisted on the
+                // session at RequestURI time) rather than by sniffing the token
+                // shape, since a bare base64url string gives no reliable signal
+                // on its own. The rest of this try block (the existing
+                // JWT/SD-JWT logic, wrapped in the `else` below) is skipped
+                // entirely for mso_mdoc — this branch is intentionally
+                // self-contained rather than reusing/restructuring that existing
+                // logic, to avoid risking the working JWT/SD-JWT path. Indentation
+                // of the untouched JWT/SD-JWT block below was NOT renormalized
+                // after wrapping it in this `else`, to keep this diff minimal and
+                // reviewable.
+                //
+                // UNVERIFIED: this mdoc path has not been tested against a real
+                // Wallet/NFC device — see MdocService.cs for caveats.
+                // See OID4VP-1.0-COMPLIANCE-AUDIT.md finding H-01.
+                bool isMsoMdoc = string.Equals(docTypeForAlg?.Format, "mso_mdoc", StringComparison.OrdinalIgnoreCase);
+                if (isMsoMdoc)
+                {
+                    string mdocResponseUri = (Environment.GetEnvironmentVariable("INTERNAL_BASE_URL")
+                        ?? $"{Request.Scheme}://{Request.Host}") + $"/openid4vc/verify/{state}";
+
+                    // FIX (H-01 follow-up / NFC-mdoc support, 2026-08-11): this
+                    // deployment's reader app does a real NFC proximity
+                    // DeviceEngagement/EReaderKey handshake with the wallet, not
+                    // a purely remote OpenID4VP exchange — decode the raw
+                    // engagement/handover bytes it forwarded so
+                    // VerifyMdocPresentation builds the correct (proximity, not
+                    // redirect-invocation) SessionTranscript. See
+                    // MdocService.BuildProximitySessionTranscript.
+                    byte[]? deviceEngagementBytes = null;
+                    byte[]? eReaderKeyBytes = null;
+                    byte[]? handoverSelectBytes = null;
+                    byte[]? handoverRequestBytes = null;
+                    try
+                    {
+                        if (!string.IsNullOrEmpty(device_engagement)) deviceEngagementBytes = vpServ.Base64UrlDecode(device_engagement);
+                        if (!string.IsNullOrEmpty(e_reader_key)) eReaderKeyBytes = vpServ.Base64UrlDecode(e_reader_key);
+                        if (!string.IsNullOrEmpty(handover_select)) handoverSelectBytes = vpServ.Base64UrlDecode(handover_select);
+                        if (!string.IsNullOrEmpty(handover_request)) handoverRequestBytes = vpServ.Base64UrlDecode(handover_request);
+                    }
+                    catch (Exception e)
+                    {
+                        logger.Info($"mdoc engagement fields failed to base64url-decode: {e.Message}");
+                        return FailSession(new
+                        {
+                            error = "invalid_request",
+                            error_description = "Present VP is invalid",
+                            reason = "malformed_engagement_bytes"
+                        });
+                    }
+                    if (deviceEngagementBytes == null || eReaderKeyBytes == null || handoverSelectBytes == null)
+                    {
+                        logger.Info("mdoc verify failed: device_engagement/e_reader_key/handover_select missing");
+                        return FailSession(new
+                        {
+                            error = "invalid_request",
+                            error_description = "Present VP is invalid",
+                            reason = "missing_engagement_bytes"
+                        });
+                    }
+
+                    var mdocResult = new MdocService().VerifyMdocPresentation(
+                        vpTokenForResolve,
+                        session.ClientId,
+                        session.Nonce,
+                        mdocResponseUri,
+                        vpServ,
+                        deviceEngagementBytes,
+                        eReaderKeyBytes,
+                        handoverSelectBytes,
+                        handoverRequestBytes);
+
+                    if (!mdocResult.IsValid)
+                    {
+                        logger.Info($"mdoc verify failed: {mdocResult.ErrorCode} — {mdocResult.ErrorMessage}");
+                        return FailSession(new
+                        {
+                            error = "invalid_request verify failed",
+                            error_description = "Present VP is invalid",
+                            reason = mdocResult.ErrorCode
+                        });
+                    }
+
+                    if (!vpServ.ValidateAgainstDcqlQuery(session.DcqlQuery, "mso_mdoc", mdocResult.DocType, out string mdocDcqlErr))
+                    {
+                        logger.Info($"mdoc DCQL result check failed: {mdocDcqlErr}");
+                        return FailSession(new
+                        {
+                            error = "invalid_request mdoc DCQL result check failed",
+                            error_description = "Present VP is invalid",
+                            reason = mdocDcqlErr
+                        });
+                    }
+
+                    vc_token = vp_token?.Trim(); // raw base64url DeviceResponse, stored as-is
+                    vp_payload = null; // no JWT payload segment for mdoc — nothing to persist here
+                    logger.Info("mdoc verify passed (IssuerAuth + digests + DeviceAuth verified)");
+                }
+                else
+                {
                 if (vpTokenForResolve != null && vpTokenForResolve.Contains('~'))
                 {
                     vpTokenForResolve = vpTokenForResolve.Split('~')[0];
@@ -352,9 +708,9 @@ namespace VerifierAPI.Controllers
 
                 if (string.IsNullOrEmpty(didkey))
                 {
-                    return BadRequest(new
+                    return FailSession(new
                     {
-                        error = "invalid_request",
+                        error = "invalid_request sd-jwt",
                         error_description = "Present VP is invalid"
                     });
                 }
@@ -416,9 +772,9 @@ namespace VerifierAPI.Controllers
                         if (!sdResult.IsValid)
                         {
                             logger.Info($"SD-JWT verify failed: {sdResult.ErrorCode} — {sdResult.ErrorMessage}");
-                            return BadRequest(new
+                            return FailSession(new
                             {
-                                error = "invalid_request",
+                                error = "invalid_request verify failed",
                                 error_description = "Present VP is invalid",
                                 reason = sdResult.ErrorCode
                             });
@@ -433,9 +789,9 @@ namespace VerifierAPI.Controllers
                         if (!vpServ.ValidateAgainstDcqlQuery(session.DcqlQuery, "dc+sd-jwt", actualVct, out string sdDcqlErr))
                         {
                             logger.Info($"SD-JWT DCQL result check failed: {sdDcqlErr}");
-                            return BadRequest(new
+                            return FailSession(new
                             {
-                                error = "invalid_request",
+                                error = "invalid_request SD-JWT DCQL result check failed",
                                 error_description = "Present VP is invalid",
                                 reason = sdDcqlErr
                             });
@@ -459,9 +815,9 @@ namespace VerifierAPI.Controllers
                         if (!vpServ.ValidateVpNonceAndAudience(vp_payload, session.Nonce, session.ClientId, out string nonceAudErr))
                         {
                             logger.Info($"jwt_vc_json VP nonce/aud check failed: {nonceAudErr}");
-                            return BadRequest(new
+                            return FailSession(new
                             {
-                                error = "invalid_request",
+                                error = "invalid_request jwt_vc_json VP nonce/aud check failed",
                                 error_description = "Present VP is invalid",
                                 reason = nonceAudErr
                             });
@@ -488,9 +844,9 @@ namespace VerifierAPI.Controllers
                             if (!vpServ.IsCredentialTimeValid(credNbf, credExp, out string timeErr))
                             {
                                 logger.Info($"jwt_vc_json time validity check failed: {timeErr}");
-                                return BadRequest(new
+                                return FailSession(new
                                 {
-                                    error = "invalid_request",
+                                    error = $"invalid_request jwt_vc_json time validity check failed: {timeErr}",
                                     error_description = "Present VP is invalid",
                                     reason = timeErr
                                 });
@@ -508,9 +864,9 @@ namespace VerifierAPI.Controllers
                             if (!vpServ.ValidateAgainstDcqlQuery(session.DcqlQuery, "jwt_vc_json", actualType, out string jwtDcqlErr))
                             {
                                 logger.Info($"jwt_vc_json DCQL result check failed: {jwtDcqlErr}");
-                                return BadRequest(new
+                                return FailSession(new
                                 {
-                                    error = "invalid_request",
+                                    error = $"invalid_request jwt_vc_json DCQL result check failed: {jwtDcqlErr}",
                                     error_description = "Present VP is invalid",
                                     reason = jwtDcqlErr
                                 });
@@ -524,9 +880,9 @@ namespace VerifierAPI.Controllers
                             // handled above via TryGetProperty without throwing).
                             // Reject rather than silently skip time/DCQL validation.
                             logger.Info("jwt_vc_json VC payload was not valid JSON");
-                            return BadRequest(new
+                            return FailSession(new
                             {
-                                error = "invalid_request",
+                                error = "invalid_request jwt_vc_json VC payload was not valid JSON",
                                 error_description = "Present VP is invalid",
                                 reason = "malformed_vc_payload"
                             });
@@ -545,9 +901,9 @@ namespace VerifierAPI.Controllers
                         // the VC signature never verified, which made GetScanStatus
                         // report "completed" for a credential that failed verification.
                         logger.Info($"VC verify failed: {ErrMsg}");
-                        return BadRequest(new
+                        return FailSession(new
                         {
-                            error = "invalid_request",
+                            error = $"invalid_request VC verify failed: {ErrMsg}",
                             error_description = "Present VP is invalid"
                         });
                     }
@@ -555,20 +911,33 @@ namespace VerifierAPI.Controllers
                 }
                 else
                 {
-
-                    return BadRequest(new
+                    // FIX (silent-failure diagnosability, 2026-08-21): this branch used to
+                    // return a hardcoded "invalid_request **** " placeholder and never log
+                    // anything — a real failure here (e.g. DID resolution returning no/wrong
+                    // key, wrong alg, corrupted signature) was completely opaque: the app log
+                    // showed "Resolving VP signer DID" and then nothing, straight to the 400,
+                    // with no way to tell why. VerifyJWS's actual ErrMsg was computed but
+                    // discarded. Now logged and returned like every other verify-failure path
+                    // below (e.g. the VC-verify-failed branch a few lines down).
+                    logger.Info($"Outer VP JWS verify failed: {ErrMsg}");
+                    return FailSession(new
                     {
-                        error = "invalid_request",
-                        error_description = "Present VP is invalid"
+                        error = $"invalid_request VP verify failed: {ErrMsg}",
+                        error_description = "Present VP is invalid",
+                        reason = "vp_signature_invalid"
                     });
                 }
+                } // closes `else` for `if (isMsoMdoc)` added above (H-01 follow-up / NFC-mdoc support)
 
             }
             catch (Exception e)
             {
-                return BadRequest(new
+                // FIX (M-04 remediation, 2026-08-23): an unhandled exception anywhere in
+                // the verification try block above is a failure just like any of the
+                // explicit checks — previously this left the session Pending too.
+                return FailSession(new
                 {
-                    error = "invalid_request",
+                    error = $"invalid_request {e.Message}",
                     error_description = "Present VP is invalid"
                 });
             }
@@ -582,7 +951,6 @@ namespace VerifierAPI.Controllers
                 logger.Info($"vct => {vct}");
                 string docType = vct switch
                 {
-                    string v when v.EndsWith("BootCampCredential") => "BootCamp",
                     string v when v.EndsWith("TranscriptCredential") => "TranscriptCredential_dc+sd-jwt",
                     string v when v.EndsWith("Iso18013DriversLicenseCredential") => "Iso18013DriversLicenseCredential_dc+sd-jwt",
                     string v when v.EndsWith("IDCard") => "IDCard_dc+sd-jwt",
@@ -591,12 +959,22 @@ namespace VerifierAPI.Controllers
 
                 string url = HttpContext.Request.IsHttps ? "https://" : "http://";
                 var externalBase = Environment.GetEnvironmentVariable("BASE_URL") ?? $"{url}{Request.Host}";
-                baseUrl = $"{externalBase}/PresentResult/Result/{state}";
+
+                // FIX (M-02, 2026-08-09): redirect_uri used to embed `state`, which
+                // was already disclosed to the Wallet earlier in this same exchange
+                // — anyone who observed it (browser history, referrer, shared device)
+                // could fetch the result for as long as the row existed, with no
+                // expiry. ResponseCode previously just stored the literal string
+                // "200" (an HTTP status, not a secret) and was never freshly
+                // generated. It's repurposed here as an actual random, single-use-
+                // window response code: freshly generated on every response, and
+                // PresentResultController now looks results up by this code (with a
+                // short validity window) instead of by SessionId.
+                // See OID4VP-1.0-COMPLIANCE-AUDIT.md finding M-02.
+                string responseCode = WebEncoders.Base64UrlEncode(RandomNumberGenerator.GetBytes(32));
+
+                baseUrl = $"{externalBase}/PresentResult/Result/{responseCode}";
                 logger.Info($"result => {docType}");
-                if (docType == "BootCamp")
-                {
-                    baseUrl = $"{externalBase}/PresentResult/BootCamp/{state}";
-                }
 
                 //save to result to db
                 Dbverifierresponse dbresult = new Dbverifierresponse();
@@ -606,7 +984,7 @@ namespace VerifierAPI.Controllers
                 dbresult.VpToken = vp_payload;
                 dbresult.VcPayload = vc_token;// vctoken;
                 dbresult.PresentationSubmission = null;
-                dbresult.ResponseCode = "200";
+                dbresult.ResponseCode = responseCode;
                 dbresult.ReceivedAt = DateTime.UtcNow;
 
                 var oldResult = context.Dbverifierresponses.Where(i => i.SessionId == state).FirstOrDefault();
@@ -616,6 +994,8 @@ namespace VerifierAPI.Controllers
                     //oldResult.SessionId = stateid;
                     oldResult.VpToken = vp_payload;
                     oldResult.VcPayload = vc_token;
+                    oldResult.ResponseCode = responseCode;
+                    oldResult.ReceivedAt = DateTime.UtcNow;
                 }
                 else
                 {
@@ -635,7 +1015,7 @@ namespace VerifierAPI.Controllers
             {
                 return BadRequest(new
                 {
-                    error = "invalid_request",
+                    error = $"invalid_request {e.Message}",
                     error_description = "Present VP is invalid"
                 });
             }

@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>จุดตรวจสอบ — OIDC4VP Infrared Scan Terminal</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@@400;500;600;700&family=IBM+Plex+Sans+Thai:wght@@300;400;500;600;700&family=JetBrains+Mono:wght@@400;500;600&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@@400;500;600;700&family=Kanit:wght@@300;400;500;600;700&family=JetBrains+Mono:wght@@400;500;600&display=swap" rel="stylesheet">
     <style>
         :root {
             --bg-void: #0a0c09;
@@ -23,7 +23,7 @@
             --text-mid: #a9b09e;
             --text-dim: #6c7263;
             --font-display: 'Space Grotesk', sans-serif;
-            --font-thai: 'IBM Plex Sans Thai', sans-serif;
+            --font-thai: 'Kanit', sans-serif;
             --font-mono: 'JetBrains Mono', monospace;
         }
 
@@ -893,7 +893,7 @@
 
                     <div class="scan-btn-row">
                         <button class="primary" id="scanBtn" onclick="startScan()">จำลองการสแกน (โหมดทดสอบ)</button>
-                        <button class="ghost" id="resetBtn" onclick="resetAll()" disabled>รีเซ็ต</button>
+                        <button class="ghost" id="resetBtn" onclick="resetAll()">รีเซ็ต</button>
                     </div>
                    @*  <label class="fail-toggle">
                         <input type="checkbox" id="forceFail"> จำลองกรณีตรวจสอบไม่ผ่าน (invalid signature)
@@ -991,22 +991,28 @@
               {k:'full_name', v:'SIRIPORN THONGDEE'},
               {k:'birthdate', v:'1998-04-12'},
               {k:'address', v:'123 หมู่ 4 ต.บางรัก อ.เมือง จ.กรุงเทพฯ'},
-              {k:'expiry_date', v:'2030-04-12'},
-              {k:'religion', v:'พุทธ'}
+              {k:'expiry_date', v:'2030-04-12'}
+              //{k:'religion', v:'พุทธ'}
             ]
           },
           {
             id:'mdl', label:'ใบขับขี่ดิจิทัล (mDL)', format:'dc+sd-jwt',
             pd:'mdl-pd', doctype:'driverlicense', apiDocType:'DriverLicense',
+            // FIX (claim-name mismatch follow-up, 2026-08-19): this preview list is not
+            // read anywhere in the real scan/poll flow below (claimsBox is populated
+            // generically from the live /verifier/status response, see startScan) — it's
+            // decorative only. Kept in sync anyway with the claim names this Issuer
+            // actually discloses / VCService.GetClaimsByDocType("driverlicense_credential")
+            // now requests, instead of the earlier made-up names.
             claims:[
-              {k:'license_number', v:'62-XXXXXXX'},
-              {k:'full_name', v:'SIRIPORN THONGDEE'},
-              {k:'birthdate', v:'1998-04-12'},
-              {k:'address', v:'123 หมู่ 4 ต.บางรัก อ.เมือง จ.กรุงเทพฯ'},
-              {k:'license_class', v:'B'},
-              {k:'issue_date', v:'2024-11-30'},
-              {k:'expiry_date', v:'2029-11-30'},
-              {k:'vehicle_categories', v:'A, B'}
+              {k:'document_number', v:'123456789'},
+              {k:'given_name', v:'นางสาวทดสอบ'},
+              {k:'family_name', v:'เอกสารดิจิตัล'},
+              {k:'birth_date', v:'1987-06-10'},
+              {k:'issue_date', v:'2023-01-01'},
+              {k:'expiry_date', v:'2033-01-01'},
+              {k:'resident_address', v:'123/45 ถนนสุขุมวิท'},
+              {k:'driving_privileges', v:'รถยนต์ส่วนบุคคล, รถจักรยานยนต์'}
             ]
           }
         ];
@@ -1119,7 +1125,10 @@
           result.classList.remove('show');
           hideWalletUri();
           syncScanBtn();
-          resetBtn.disabled = true;
+          // FIX (2026-08-15): Reset button now stays enabled at all times (per
+          // user request) — previously disabled here and only re-enabled once
+          // a scan finished, so there was no way to bail out of a stuck/hung
+          // scan or poll without reloading the page.
         }
 
         function wait(ms){ return new Promise(r=>setTimeout(r,ms)); }
@@ -1131,14 +1140,26 @@
 
         // ดึง stateId จาก openid4vp:// URI ที่ backend ส่งกลับมาจาก /verifier/scan
         // (ไม่ใช่จาก scanned_value ตอนแรก!) เพราะ backend สร้าง stateId ของตัวเอง
-        // ผ่าน SaveVerifierSession แล้วฝังไว้ใน client_id แบบ:
-        //   client_id=redirect_uri:{baseUrl}/openid4vc/verify/{stateId}
-        // ถ้า HandleQrScanAsync เปลี่ยนรูปแบบ client_id/URI ในอนาคต ต้องแก้ regex นี้ตาม
+        // ผ่าน SaveVerifierSession แล้วฝังไว้ใน request_uri แบบ:
+        //   request_uri={baseUrl}/openid4vc/request/{stateId}
+        // FIX (2026-08-15): regex เดิมมองหา "/openid4vc/verify/{stateId}" แต่
+        // VerifierRequestService.BuildShortOpenId4VpUri (ดู HandleQrScanAsync)
+        // ใส่ stateId ไว้ใน query param request_uri ที่ชี้ไปที่
+        // "/openid4vc/request/{stateId}" (endpoint ของ RequestURI ที่ wallet
+        // เรียกไปดึง Authorization Request Object) ไม่ใช่ "/openid4vc/verify/"
+        // (endpoint นั้นคือ response_uri ที่ wallet POST vp_token กลับมา —
+        // อยู่ "ข้างใน" request object ที่ signed ไว้ ไม่ได้อยู่ใน openid4vp://
+        // URI ที่คืนมาตรงนี้) ทำให้ regex เดิมไม่ match อะไรเลย เจอ error
+        // "แกะ stateId จาก openid4vp URI ไม่ได้ — ข้าม polling" ทุกครั้ง
+        // stateId ตัวเดียวกันนี้ใช้ทั้งสอง endpoint (request กับ verify) และ
+        // ถูกเก็บเป็น Dbverifierresponse.SessionId เหมือนกัน จึงใช้ค่าที่แกะ
+        // จาก /openid4vc/request/ ไป poll /verifier/status/{sessionId} ได้ถูกต้อง
+        // ถ้า HandleQrScanAsync เปลี่ยนรูปแบบ request_uri ในอนาคต ต้องแก้ regex นี้ตาม
         function extractSessionId(openid4vpUriString){
           let decoded;
           try { decoded = decodeURIComponent(String(openid4vpUriString)); }
           catch { decoded = String(openid4vpUriString); } // เผื่อ decode พังเพราะมี % ที่ไม่ใช่ encoding
-          const m = decoded.match(/\/openid4vc\/verify\/([a-zA-Z0-9-]+)/);
+          const m = decoded.match(/\/openid4vc\/request\/([a-zA-Z0-9-]+)/);
           return m ? m[1] : null;
         }
 
@@ -1248,7 +1269,6 @@
             payload = 'openid4vp://?client_id=verifier.example.co.th&presentation_definition=' + (dt ? dt.pd : 'unknown-pd') + ' (test mode)';
           }
           scanBtn.disabled = true;
-          resetBtn.disabled = true;
           clearLog();
           result.classList.remove('show');
           hideWalletUri();
@@ -1332,7 +1352,6 @@
             `;
             result.classList.add('show');
             running = false;
-            resetBtn.disabled = false;
             return;
           }
 
@@ -1361,7 +1380,6 @@
             claimsBox.innerHTML = `<div class="claim-row"><span class="ck">error</span><span class="cv" style="color:#ff2a1f">extract_session_id_failed</span></div>`;
             result.classList.add('show');
             running = false;
-            resetBtn.disabled = false;
             return;
           }
           log('<span class="k">session_id</span> → <span class="v">' + escapeHtml(sessionId) + '</span>');
@@ -1390,7 +1408,6 @@
             `;
             result.classList.add('show');
             running = false;
-            resetBtn.disabled = false;
             return;
           }
 
@@ -1420,7 +1437,6 @@
           claimsBox.innerHTML = rows;
           result.classList.add('show');
           running = false;
-          resetBtn.disabled = false;
         }
     </script>
 </body>

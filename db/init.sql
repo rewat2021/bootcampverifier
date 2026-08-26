@@ -99,6 +99,13 @@ UNLOCK TABLES;
 DROP TABLE IF EXISTS `dbverifierlog`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
+-- FEATURE (audit trail, 2026-08-15): this table already existed but nothing ever
+-- wrote to it — repurposed as the verification audit log (records every
+-- VerifierVP call, success AND failure, via VerifierAuditLogFilter) instead of
+-- adding a new table. client_ip/user_agent are the only columns new to this
+-- schema; see db/migrations/002_add_verifier_log_client_info.sql for the
+-- additive ALTER TABLE to run against an existing database instead of this
+-- DROP+CREATE dump.
 CREATE TABLE `dbverifierlog` (
   `id` int NOT NULL AUTO_INCREMENT,
   `team_id` varchar(50) NOT NULL,
@@ -114,6 +121,8 @@ CREATE TABLE `dbverifierlog` (
   `claims` json DEFAULT NULL,
   `presentation_submission` json DEFAULT NULL,
   `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
+  `client_ip` varchar(64) DEFAULT NULL,
+  `user_agent` varchar(500) DEFAULT NULL,
   PRIMARY KEY (`id`),
   KEY `idx_team` (`team_id`),
   KEY `idx_status` (`status`),

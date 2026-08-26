@@ -128,9 +128,36 @@ public class AccountController : Controller
         // -------------------------------------------------------
         // logic เดียวกับ Login (username/password) เดิมของ Verifier
         // -------------------------------------------------------
-        if (!string.IsNullOrEmpty(ReturnUrl) && Url.IsLocalUrl(ReturnUrl))
+        // FIX (2026-08-15): the ReturnUrl query param almost never actually
+        // arrives here in the real flow — this action is the redirect_uri the
+        // external ThaID gateway calls back to, and the gateway only appends
+        // its own params (pid), not ours. That's exactly why ThaIDLogin
+        // (/thaiid/login, below) stashes {ReturnUrl, DocumentType} in the
+        // thaiid_pending_return cookie before leaving for the gateway — but
+        // nothing ever read that cookie back until now, so every ThaID login
+        // silently ignored where the user actually came from (e.g.
+        // VerifyScanQR) and always landed on VerifyResult. Fall back to the
+        // cookie when the query param is empty, then clear it either way.
+        string? effectiveReturnUrl = ReturnUrl;
+        if (string.IsNullOrEmpty(effectiveReturnUrl) &&
+            Request.Cookies.TryGetValue(PendingReturnCookie, out var pendingJson) &&
+            !string.IsNullOrEmpty(pendingJson))
         {
-            return Redirect(ReturnUrl);
+            try
+            {
+                var pending = JsonConvert.DeserializeObject<Newtonsoft.Json.Linq.JObject>(pendingJson);
+                effectiveReturnUrl = pending?["ReturnUrl"]?.ToString();
+            }
+            catch (Exception ex)
+            {
+                log.Warn("ThaIDSignIn: failed to parse " + PendingReturnCookie + " cookie => " + ex.Message);
+            }
+        }
+        Response.Cookies.Delete(PendingReturnCookie);
+
+        if (!string.IsNullOrEmpty(effectiveReturnUrl) && Url.IsLocalUrl(effectiveReturnUrl))
+        {
+            return Redirect(effectiveReturnUrl);
         }
 
         // เลือกอัตโนมัติจาก User-Agent ของเครื่องที่กำลัง login อยู่ ณ ตอนนี้

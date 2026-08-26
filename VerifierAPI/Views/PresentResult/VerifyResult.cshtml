@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>TechCorp Thailand — ยืนยันตัวตน</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@400;500;600;700;800&family=Sarabun:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Kanit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     <style>
         :root {
             --bg-navy-deep: #0b1330;
@@ -36,7 +36,7 @@
 
         html, body {
             background: var(--bg-navy-deep);
-            font-family: "Noto Sans Thai", "Sarabun", system-ui, sans-serif;
+            font-family: "Kanit", "Noto Sans Thai", "Sarabun", system-ui, sans-serif;
             color: var(--text-primary);
             -webkit-font-smoothing: antialiased;
         }
@@ -615,22 +615,43 @@
 
         function wait(ms) { return new Promise(r => setTimeout(r, ms)); }
 
-        async function pollForResult(sessionId) {
+        // FIX (2026-08-15): แสดงนับถอยหลังเวลาที่เหลือก่อน timeout ("หมดเวลาใน : mm:ss")
+        // ให้ผู้ใช้เห็นว่าเหลือเวลาอีกเท่าไหร่ แทนที่จะมีแค่ข้อความ "รอการตอบกลับ..." เฉย ๆ
+        function formatMMSS(ms) {
+            const totalSeconds = Math.max(0, Math.ceil(ms / 1000));
+            const mm = String(Math.floor(totalSeconds / 60)).padStart(2, '0');
+            const ss = String(totalSeconds % 60).padStart(2, '0');
+            return mm + ':' + ss;
+        }
+
+        async function pollForResult(sessionId, statusText) {
             const startedAt = Date.now();
-            while (Date.now() - startedAt < POLL_TIMEOUT_MS) {
-                await wait(POLL_INTERVAL_MS);
-                try {
-                    const resp = await fetch('/verifier/status/' + encodeURIComponent(sessionId));
-                    if (!resp.ok) continue; // error ชั่วคราว ลองรอบถัดไป ไม่ล้มทันที
-                    const data = await resp.json();
-                    if (data.status === 'completed') return { ok: true, claims: data.claims || {} };
-                    if (data.status === 'failed') return { ok: false, error: data.error || 'verification_failed' };
-                    // status === 'pending' → วนต่อ
-                } catch (err) {
-                    console.error('[verifier/status] poll error:', err);
+            const countdownTimer = setInterval(() => {
+                const msLeft = POLL_TIMEOUT_MS - (Date.now() - startedAt);
+                statusText.textContent = 'รอการตอบกลับจาก Wallet App... หมดเวลาใน : ' + formatMMSS(msLeft);
+            }, 1000);
+
+            try {
+                while (Date.now() - startedAt < POLL_TIMEOUT_MS) {
+                    await wait(POLL_INTERVAL_MS);
+                    try {
+                        const resp = await fetch('/verifier/status/' + encodeURIComponent(sessionId));
+                        if (!resp.ok) continue; // error ชั่วคราว ลองรอบถัดไป ไม่ล้มทันที
+                        const data = await resp.json();
+                        // FIX (M-02, 2026-08-09): response_code is required to reach
+                        // /PresentResult/Result now — see VerifyResult.cshtml's caller
+                        // below and VerifierScanController.GetScanStatus.
+                        if (data.status === 'completed') return { ok: true, claims: data.claims || {}, responseCode: data.response_code };
+                        if (data.status === 'failed') return { ok: false, error: data.error || 'verification_failed' };
+                        // status === 'pending' → วนต่อ
+                    } catch (err) {
+                        console.error('[verifier/status] poll error:', err);
+                    }
                 }
+                return { ok: false, error: 'timeout' };
+            } finally {
+                clearInterval(countdownTimer);
             }
-            return { ok: false, error: 'timeout' };
         }
 
         async function loadPresentationRequest() {
@@ -641,6 +662,7 @@
             const statusText = document.getElementById("statusText");
 
             document.getElementById(isMobileOrTablet ? "deeplinkView" : "qrView").style.display = "block";
+            qrFrame.classList.remove("is-loaded"); // เผื่อเป็นการ auto-refresh QR รอบใหม่ ให้ skeleton โชว์อีกครั้งจนกว่า QR ใหม่จะโหลดเสร็จ
 
             let sessionId = null;
 
@@ -675,27 +697,55 @@
                 statusPill.classList.remove("is-error");
             } catch (err) {
                 console.error("โหลดคำร้องไม่สำเร็จ:", err);
-                statusText.textContent = "โหลดคำร้องไม่สำเร็จ ลองใหม่อีกครั้ง";
+                // FIX (2026-08-15): auto-refresh แทนการค้างข้อความ "ลองใหม่อีกครั้ง"
+                // ไว้เฉย ๆ โดยไม่มีอะไรให้กดจริง — สร้างคำร้อง/QR ใหม่ให้อัตโนมัติ
+                statusText.textContent = "โหลดคำร้องไม่สำเร็จ กำลังลองใหม่...";
                 statusPill.classList.add("is-error");
+                await wait(2000); // ให้เวลาผู้ใช้เห็นข้อความก่อนสักครู่
+                loadPresentationRequest();
                 return;
             }
 
             // ---------- รอผลตรวจสอบจาก Wallet แล้วค่อยไหลต่อ ----------
-            const pollResult = await pollForResult(sessionId);
+            const pollResult = await pollForResult(sessionId, statusText);
 
             if (!pollResult.ok) {
-                statusText.textContent = pollResult.error === 'timeout'
-                    ? "หมดเวลารอ Wallet App โปรดลองใหม่อีกครั้ง"
-                    : "ตรวจสอบไม่ผ่าน โปรดลองใหม่อีกครั้ง";
+                if (pollResult.error === 'timeout') {
+                    // FIX (2026-08-15): เปลี่ยนตามที่ขอ — session หมดอายุ (timeout รอ
+                    // Wallet) ให้พากลับไป login ThaID ใหม่ แทนการขอ QR ใหม่เฉย ๆ ส่ง
+                    // ReturnUrl กลับมาหน้านี้ ThaIDSignIn จะพากลับมาที่นี่หลัง login
+                    // เสร็จ แล้ว loadPresentationRequest() จะเริ่มคำร้องใหม่เองอัตโนมัติ
+                    statusText.textContent = "หมดเวลารอ Wallet App กำลังพาไปเข้าสู่ระบบใหม่...";
+                    statusPill.classList.add("is-error");
+                    await wait(2000); // ให้เวลาผู้ใช้เห็นข้อความก่อนสักครู่
+                    window.location.href = '/Account/ThaIDLogin?ReturnUrl=' + encodeURIComponent(window.location.pathname);
+                    return;
+                }
+                // เคสอื่น (เช่น ตรวจสอบไม่ผ่าน) — ยัง auto-refresh ขอ QR/session ใหม่ให้แทน
+                statusText.textContent = "ตรวจสอบไม่ผ่าน กำลังสร้าง QR ใหม่...";
                 statusPill.classList.add("is-error");
+                await wait(2000); // ให้เวลาผู้ใช้เห็นข้อความก่อนสักครู่
+                loadPresentationRequest();
                 return;
             }
 
             // ตรวจสอบผ่าน — พาไปหน้าแสดงผล (ปลายทางเดียวกับ redirect_uri ที่ backend
-            // คำนวณไว้ใน VerifierVP: /PresentResult/Result/{state})
+            // คำนวณไว้ใน VerifierVP: /PresentResult/Result/{responseCode})
+            //
+            // FIX (M-02, 2026-08-09): navigate using the freshly generated
+            // response_code from the poll response, not the session id — Result now
+            // looks results up by ResponseCode with a short validity window.
+            // See OID4VP-1.0-COMPLIANCE-AUDIT.md finding M-02.
+            if (!pollResult.responseCode) {
+                statusText.textContent = "ตรวจสอบไม่ผ่าน กำลังสร้าง QR ใหม่...";
+                statusPill.classList.add("is-error");
+                await wait(2000); // ให้เวลาผู้ใช้เห็นข้อความก่อนสักครู่
+                loadPresentationRequest();
+                return;
+            }
             statusText.textContent = "ตรวจสอบสำเร็จ กำลังนำท่านไปหน้าถัดไป...";
             statusPill.classList.remove("is-error");
-            window.location.href = '/PresentResult/Result/' + encodeURIComponent(sessionId);
+            window.location.href = '/PresentResult/Result/' + encodeURIComponent(pollResult.responseCode);
         }
 
         document.addEventListener("DOMContentLoaded", function () {

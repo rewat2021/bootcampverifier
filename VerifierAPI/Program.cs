@@ -5,6 +5,51 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using VerifierAPI.Service;
 
+// SECURITY (C-05 remediation, 2026-08-26): ThaIDConfig__ClientID / __ClientSecret /
+// CONNECTION_STRING now come from environment variables only — appsettings.json no
+// longer carries a real value (see appsettings.json). Docker gets these from
+// `env_file: .env` in docker-compose.yml already, at the container level, before
+// this process even starts. Running from Visual Studio / `dotnet run` (no Docker)
+// has no such mechanism, so this loads the SAME repo-root .env file directly into
+// this process's environment variables — one secrets file for both paths, instead
+// of keeping a separate copy in User Secrets. Never overrides a variable that's
+// already set (so a real Docker/hosting environment always wins over this file),
+// and does nothing at all if no .env is found (e.g. inside the published
+// container image, which never has one).
+LoadDotEnvIfPresent();
+
+static void LoadDotEnvIfPresent()
+{
+    var dir = new DirectoryInfo(AppContext.BaseDirectory);
+    for (int i = 0; i < 8 && dir != null; i++, dir = dir.Parent)
+    {
+        var candidate = Path.Combine(dir.FullName, ".env");
+        if (!File.Exists(candidate)) continue;
+
+        foreach (var rawLine in File.ReadAllLines(candidate))
+        {
+            var line = rawLine.Trim();
+            if (line.Length == 0 || line.StartsWith("#")) continue;
+
+            var separatorIndex = line.IndexOf('=');
+            if (separatorIndex <= 0) continue;
+
+            var key = line.Substring(0, separatorIndex).Trim();
+            var value = line.Substring(separatorIndex + 1).Trim();
+            if (value.Length >= 2 &&
+                ((value[0] == '"' && value[^1] == '"') || (value[0] == '\'' && value[^1] == '\'')))
+            {
+                value = value.Substring(1, value.Length - 2);
+            }
+
+            // Don't clobber a value the real environment already provided.
+            if (Environment.GetEnvironmentVariable(key) == null)
+                Environment.SetEnvironmentVariable(key, value);
+        }
+        break;
+    }
+}
+
 var logger = LogManager.Setup()
                        .LoadConfigurationFromFile("nlog.config")
                        .GetCurrentClassLogger();
@@ -37,6 +82,14 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
                 context.Response.StatusCode = StatusCodes.Status401Unauthorized;
                 return Task.CompletedTask;
             }
+            // NOTE (2026-08-15): VerifyScanQR (the operator's scanning terminal)
+            // stays on this same ThaID LoginPath as every other [Authorize] page
+            // — per the user's decision, it should require ThaID login too, not
+            // a separate staff login. What makes this work correctly is that
+            // AccountController.ThaIDSignIn now honors the ReturnUrl carried
+            // through the ThaID round trip (via the thaiid_pending_return
+            // cookie set in ThaIDLogin) instead of always landing on
+            // VerifyResult — see AccountController.cs.
             context.Response.Redirect(context.RedirectUri);
             return Task.CompletedTask;
         };
@@ -103,6 +156,35 @@ builder.Services.AddScoped<VerifierAPI.Services.VerifierRequestService>();
 
 var app = builder.Build();
 
+// FIX (2026-08-15): there was no global exception handling middleware at all —
+// an unhandled exception anywhere past this point (including during Razor VIEW
+// RENDERING, which happens after a controller action returns and is NOT caught
+// by a controller-level try/catch) had nothing to turn it into an HTTP
+// response. Depending on hosting (this app is published for in-process IIS
+// hosting per web.config), that can surface to the browser as a raw connection
+// reset / "This page can't be found" instead of any error page — reported for
+// /PresentResult/Result/{id} even after the [Authorize] redirect issue (see
+// PresentResultController) was already fixed, with the domain root and other
+// routes confirmed reachable. This won't by itself explain what's throwing,
+// but it turns any future "connection just dies" symptom into an actual
+// logged, diagnosable 500 response instead of a silent reset — check
+// logs/{date}.log (nlog.config) for the real exception after this deploys.
+app.UseExceptionHandler(errApp =>
+{
+    errApp.Run(async context =>
+    {
+        var feature = context.Features.Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerFeature>();
+        logger.Error(feature?.Error, "Unhandled exception at {Path}", context.Request.Path);
+        context.Response.StatusCode = StatusCodes.Status500InternalServerError;
+        context.Response.ContentType = "text/html; charset=utf-8";
+        await context.Response.WriteAsync(
+            "<html><body style=\"font-family:sans-serif;padding:2rem\">" +
+            "<h2>เกิดข้อผิดพลาดที่ไม่คาดคิด</h2>" +
+            "<p>ระบบไม่สามารถแสดงผลหน้านี้ได้ กรุณาลองใหม่อีกครั้ง</p>" +
+            "</body></html>");
+    });
+});
+
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment() || app.Environment.IsProduction())
 {
@@ -118,8 +200,25 @@ app.UseAuthentication();                                // ต้องมาห
 app.UseAuthorization();
 app.UseSession();
 
+// FIX (2026-08-15): this pattern was missing the trailing {id?} segment.
+// PresentResultController.Result(string id) / VerifyResult() / VerifyScanQR()
+// (VerifyScanQR has its own attribute route so it was unaffected) have no
+// [Route] attribute, so they rely entirely on THIS conventional route to be
+// reachable. ASP.NET Core's router requires the URL's segment count to match
+// the template's — a 2-segment template ("{controller}/{action}") never
+// matches a 3-segment URL like "/PresentResult/Result/{responseCode}", no
+// matter what action/controller names are given. That request just fails to
+// route at all (404 before MVC even selects a controller — [Authorize] never
+// runs, no controller code runs), which is consistent with a browser-level
+// "This page can't be found" rather than any app-rendered error page. This
+// was likely the actual root cause of the /PresentResult/Result/{id}
+// "redirect มาแล้วหน้า error" reports all along — the earlier [Authorize]
+// fix on PresentResultController was a real bug too and stays fixed, but
+// wouldn't have mattered on its own since the route never matched to begin
+// with. VerifierController is unaffected — it's fully attribute-routed
+// ([Route("openid4vc")] + per-action [Route(...)]), never relied on this.
 app.MapControllerRoute(
     name: "default",
-    pattern: "{controller=Account}/{action=ThaIDLogin}");
+    pattern: "{controller=Account}/{action=ThaIDLogin}/{id?}");
 app.MapControllers();
 app.Run();

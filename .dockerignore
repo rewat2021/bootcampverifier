@@ -6,3 +6,4 @@ obj/
 *.suo
 Dockerfile
 docker-compose*.yml
+.env

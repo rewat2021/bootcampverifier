@@ -1,0 +1,164 @@
+@using VerifierAPI.Databases
+@model List<Dbverifierlog>
+@{
+    ViewData["Title"] = "บันทึกการตรวจสอบข้อมูล (Audit Log)";
+    int page = ViewBag.Page is int p ? p : 1;
+    int totalPages = ViewBag.TotalPages is int tp ? tp : 1;
+    int totalCount = ViewBag.TotalCount is int tc ? tc : 0;
+    string? statusFilter = ViewBag.StatusFilter as string;
+
+    string PageLink(int targetPage) =>
+        "?page=" + targetPage + (statusFilter != null ? "&status=" + statusFilter : "");
+    string FilterLink(string? s) =>
+        "?page=1" + (s != null ? "&status=" + s : "");
+}
+<!doctype html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>@ViewData["Title"]</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Kanit:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --navy: #0a1628;
+            --navy2: #111d33;
+            --navy3: #16233d;
+            --border: rgba(148,163,184,0.18);
+            --text: #eef2f8;
+            --muted: #8a96ad;
+            --blue: #4f7cff;
+            --green: #2ecc71;
+            --red: #e5534b;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            background: var(--navy);
+            color: var(--text);
+            font-family: "Kanit", sans-serif;
+            padding: 28px 20px 60px;
+        }
+        .wrap { max-width: 1200px; margin: 0 auto; }
+        h1 { font-size: 20px; font-weight: 700; margin-bottom: 4px; }
+        .sub { font-size: 13px; color: var(--muted); margin-bottom: 20px; font-family: "IBM Plex Mono", monospace; }
+
+        .filters { display: flex; gap: 8px; margin-bottom: 16px; }
+        .chip {
+            font-size: 12.5px; font-weight: 600; padding: 6px 14px; border-radius: 999px;
+            border: 1px solid var(--border); color: var(--muted); text-decoration: none;
+        }
+        .chip.active { color: var(--text); border-color: var(--blue); background: rgba(79,124,255,0.12); }
+
+        .table-wrap {
+            background: var(--navy2); border: 1px solid var(--border); border-radius: 12px;
+            overflow-x: auto;
+        }
+        table { width: 100%; border-collapse: collapse; min-width: 900px; }
+        th, td {
+            text-align: left; padding: 10px 14px; font-size: 12.5px;
+            border-bottom: 1px solid var(--border); vertical-align: top;
+        }
+        th {
+            background: var(--navy3); color: var(--muted); font-weight: 600;
+            font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
+            position: sticky; top: 0;
+        }
+        tr:last-child td { border-bottom: none; }
+        td.mono { font-family: "IBM Plex Mono", monospace; }
+        td.small { font-size: 11.5px; color: var(--muted); max-width: 260px; word-break: break-word; }
+        td.ua { max-width: 220px; }
+
+        .badge {
+            display: inline-block; font-size: 11px; font-weight: 700; padding: 3px 10px;
+            border-radius: 4px; letter-spacing: .03em;
+        }
+        .badge.ok { background: rgba(46,204,113,0.16); color: var(--green); }
+        .badge.fail { background: rgba(229,83,75,0.16); color: var(--red); }
+
+        .empty { text-align: center; padding: 40px; color: var(--muted); }
+
+        .pager {
+            display: flex; align-items: center; gap: 14px; margin-top: 18px;
+            font-size: 13px; color: var(--muted);
+        }
+        .pager a { color: var(--blue); text-decoration: none; font-weight: 600; }
+        .pager a:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <div class="wrap">
+        <h1>บันทึกการตรวจสอบข้อมูล (Audit Log)</h1>
+        <div class="sub">ทั้งหมด @totalCount รายการ · หน้า @@page / @totalPages</div>
+
+        <div class="filters">
+            <a class="chip @(statusFilter == null ? "active" : "")" href="@FilterLink(null)">ทั้งหมด</a>
+            <a class="chip @(statusFilter == "success" ? "active" : "")" href="@FilterLink("success")">สำเร็จ</a>
+            <a class="chip @(statusFilter == "failed" ? "active" : "")" href="@FilterLink("failed")">ไม่สำเร็จ</a>
+        </div>
+
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>เวลา (UTC)</th>
+                        <th>สถานะ</th>
+                        <th>ประเภทเอกสาร</th>
+                        <th>เหตุผล / ข้อผิดพลาด</th>
+                        <th>Presentation ID</th>
+                        <th>IP</th>
+                        <th>User-Agent</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (Model == null || Model.Count == 0)
+                    {
+                        <tr><td colspan="7" class="empty">ไม่พบข้อมูล</td></tr>
+                    }
+                    else
+                    {
+                        @foreach (var entry in Model)
+                        {
+                            bool isSuccess = string.Equals(entry.Status, "success", StringComparison.OrdinalIgnoreCase);
+                            <tr>
+                                <td class="mono">@(entry.CreatedAt?.ToString("yyyy-MM-dd HH:mm:ss") ?? "-")</td>
+                                <td><span class="badge @(isSuccess ? "ok" : "fail")">@(isSuccess ? "สำเร็จ" : "ไม่สำเร็จ")</span></td>
+                                <td>@(entry.CredentialType ?? "-")</td>
+                                <td class="small">
+                                    @if (string.IsNullOrEmpty(entry.ErrorCode) && string.IsNullOrEmpty(entry.ErrorMessage))
+                                    {
+                                        @:-
+                                    }
+                                    else
+                                    {
+                                        @(entry.ErrorCode ?? "")
+                                        if (!string.IsNullOrEmpty(entry.ErrorMessage))
+                                        {
+                                            @:  —  @entry.ErrorMessage
+                                        }
+                                    }
+                                </td>
+                                <td class="mono small">@entry.PresentationId</td>
+                                <td class="mono small">@(entry.ClientIp ?? "-")</td>
+                                <td class="mono small ua">@(entry.UserAgent ?? "-")</td>
+                            </tr>
+                        }
+                    }
+                </tbody>
+            </table>
+        </div>
+
+        <div class="pager">
+            @if (page > 1)
+            {
+                <a href="@PageLink(page - 1)">« ก่อนหน้า</a>
+            }
+            <span>หน้า @@page / @totalPages</span>
+            @if (page < totalPages)
+            {
+                <a href="@PageLink(page + 1)">ถัดไป »</a>
+            }
+        </div>
+    </div>
+</body>
+</html>

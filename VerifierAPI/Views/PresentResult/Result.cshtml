@@ -8,6 +8,7 @@
     string holderDid = "-";
     string issuedDate = "-";
     string jtiId = "-";
+    string vct = "-";
 
     if (Model?.VcPayload != null)
     {
@@ -28,6 +29,7 @@
                 if (root.TryGetProperty("jti", out System.Text.Json.JsonElement jti)) jtiId = jti.GetString() ?? "-";
                 if (root.TryGetProperty("issued", out System.Text.Json.JsonElement issued)) issuedDate = issued.GetString() ?? "-";
                 else if (root.TryGetProperty("issuanceDate", out System.Text.Json.JsonElement idate)) issuedDate = idate.GetString() ?? "-";
+                if (root.TryGetProperty("vct", out System.Text.Json.JsonElement vctEl)) vct = vctEl.GetString() ?? "-";
 
                 // Non-SD claims
                 var skipKeys = new HashSet<string> { "_sd", "_sd_alg", "cnf", "iss", "sub", "jti", "iat", "exp", "vct", "issued", "issuanceDate" };
@@ -69,6 +71,30 @@
 
     string C(string key, string fallback = "-") => claims.TryGetValue(key, out var v) ? v : fallback;
     bool Has(string key) => claims.ContainsKey(key) && !string.IsNullOrEmpty(claims[key]);
+
+    // FIX (claim-name mismatch follow-up, 2026-08-19): this view used to assume every
+    // credential exposes a single "full_name" disclosure (true for transcript_credential,
+    // false for the driverlicense_credential SD-JWT, which discloses separate
+    // family_name/given_name — see VCService.GetClaimsByDocType). Compose a display name
+    // from either shape instead of only ever showing "-" for family_name/given_name-style
+    // credentials.
+    bool HasAnyName = Has("full_name") || Has("family_name") || Has("given_name");
+    string DisplayName() => Has("full_name")
+        ? C("full_name")
+        : $"{C("given_name", "")} {C("family_name", "")}".Trim();
+
+    // The credential-type tag below used to be a hardcoded "TranscriptCredential" label
+    // regardless of which credential was actually presented (e.g. driverlicense_credential).
+    // Derive it from the credential's own `vct` instead — `vct` is a URL whose last path
+    // segment is the same Endpoint value used to build vct_values in
+    // VCService.BuildDcqlQuery (e.g. ".../credentials/DrivingLicense" → "DrivingLicense").
+    string credentialLabel = (!string.IsNullOrEmpty(vct) && vct != "-")
+        ? (vct.Split('/').LastOrDefault(s => !string.IsNullOrEmpty(s)) ?? "Credential")
+        : "Credential";
+
+    // Driver-license-specific claims (VCService.GetClaimsByDocType, "driverlicense_credential")
+    // — gates the dedicated card below so transcript/idcard results are unaffected.
+    bool isDriverLicense = Has("document_number") || Has("driving_privileges") || Has("resident_address");
 }
 <!DOCTYPE html>
 <html lang="th">
@@ -76,7 +102,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>@ViewData["Title"]</title>
-    <link href="https://fonts.googleapis.com/css2?family=Anuphan:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Kanit:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
     <style>
         :root {
             --navy: #0a1628;
@@ -94,7 +120,7 @@
         }
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
-            font-family: 'Anuphan', sans-serif;
+            font-family: 'Kanit', sans-serif;
             background: var(--navy);
             color: var(--white);
             min-height: 100vh;
@@ -170,7 +196,7 @@
         <div class="tags">
             <span class="tag tag-teal">🔐 EdDSA Signed</span>
             <span class="tag tag-blue">dc+sd-jwt</span>
-            <span class="tag tag-blue">TranscriptCredential</span>
+            <span class="tag tag-blue">@credentialLabel</span>
             <span class="tag tag-gold">Selective Disclosure</span>
         </div>
 
@@ -189,9 +215,9 @@
                     <div class="student-hero">
                         <div class="avatar">👤</div>
                         <div>
-                            @if (Has("full_name"))
+                            @if (HasAnyName)
                             {
-                                <div class="student-name">@C("full_name")</div>
+                                <div class="student-name">@DisplayName()</div>
                             }
                             @if (Has("student_id"))
                             {
@@ -238,6 +264,68 @@
                     </div>
                 </div>
             </div>
+
+            @if (isDriverLicense)
+            {
+                <div class="card">
+                    <div class="card-head">
+                        <span class="card-head-title">🚗 ข้อมูลใบขับขี่</span>
+                        <span class="badge-ok">✓ VERIFIED</span>
+                    </div>
+                    <div class="card-body">
+                        <div class="field-grid">
+                            @if (Has("document_number"))
+                            {
+                                <div class="field">
+                                    <label>เลขที่ใบอนุญาตขับขี่</label>
+                                    <div class="val">@C("document_number")</div>
+                                </div>
+                            }
+                            @if (Has("birth_date"))
+                            {
+                                <div class="field">
+                                    <label>วันเกิด</label>
+                                    <div class="val">@C("birth_date")</div>
+                                </div>
+                            }
+                            @if (Has("issue_date"))
+                            {
+                                <div class="field">
+                                    <label>วันที่ออกบัตร</label>
+                                    <div class="val">@C("issue_date")</div>
+                                </div>
+                            }
+                            @if (Has("expiry_date"))
+                            {
+                                <div class="field">
+                                    <label>วันหมดอายุ</label>
+                                    <div class="val">@C("expiry_date")</div>
+                                </div>
+                            }
+                            @if (Has("resident_address"))
+                            {
+                                <div class="field full">
+                                    <label>ที่อยู่ตามทะเบียนบ้าน</label>
+                                    <div class="val">@C("resident_address")</div>
+                                </div>
+                            }
+                            @if (Has("driving_privileges"))
+                            {
+                                <div class="field full">
+                                    <label>ประเภทที่ได้รับอนุญาตขับขี่</label>
+                                    <div class="val mono">@C("driving_privileges")</div>
+                                </div>
+                            }
+                        </div>
+                        @if (Has("portrait"))
+                        {
+                            <div class="did-label">รูปถ่ายผู้ถือบัตร</div>
+                            <img src="data:image/jpeg;base64,@C("portrait")" alt="portrait"
+                                 style="max-width:160px;border-radius:10px;border:1px solid var(--border);margin-top:8px;" />
+                        }
+                    </div>
+                </div>
+            }
 
             <div class="card">
                 <div class="card-head">

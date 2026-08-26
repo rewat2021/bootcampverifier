@@ -8,8 +8,8 @@
 |---|---|---|
 | `CONNECTION_STRING` | จำเป็น | connection string เชื่อม MySQL รูปแบบ `server=<host>;port=<port>;database=<db>;user=<user>;password=<password>` ปัจจุบันชี้ไปที่ MySQL remote server (ไม่ใช่ container ในเครื่อง) |
 | `MYSQL_ROOT_PASSWORD` | ใช้เฉพาะกรณีรัน container `verifier-mysql` เองในเครื่อง | ไม่เกี่ยวถ้าต่อ MySQL remote อย่างเดียวตามที่ตั้งค่าไว้ตอนนี้ |
-| `ThaIDConfig__ClientID` | จำเป็น | client id ที่ได้จาก ThaID gateway — bind เข้า `ThaIDConfig:ClientID` ผ่าน naming convention แบบ double-underscore ของ .NET |
-| `ThaIDConfig__ClientSecret` | จำเป็น | client secret จาก ThaID gateway — **ต้อง rotate เป็นค่าใหม่** เพราะค่าเดิมเคย commit ขึ้น git มาก่อน ถือว่ารั่วแล้ว (ดูหัวข้อ 4) |
+| `ThaIDConfig__ClientID` | จำเป็น | client id ที่ได้จาก ThaID gateway |
+| `ThaIDConfig__ClientSecret` | จำเป็น | client secret จาก ThaID gateway |
 | `ASPNETCORE_ENVIRONMENT` | จำเป็น | `Production` หรือ `Development` |
 | `BASE_URL` | จำเป็น | URL สาธารณะของ VerifierAPI เอง ที่ browser/Wallet ภายนอกเข้าถึงได้ |
 | `INTERNAL_BASE_URL` | จำเป็น | URL ของ VerifierAPI เอง ที่ใช้สร้าง `response_uri`/callback ภายในโปรโตคอล OpenID4VP (คนละความหมายกับ `ISSUER_BASE_URL` — อย่าใช้ปนกัน) |

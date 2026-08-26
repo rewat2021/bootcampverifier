@@ -84,19 +84,13 @@ docker-compose down
 
 ## 3. Restore ฐานข้อมูลจากไฟล์ dump (.sql)
 
-ใช้เมื่อมีไฟล์ mysqldump (เช่น `Dump20260826.sql`) ที่ต้องการ import กลับเข้า MySQL remote (`192.100.10.48`) — ไฟล์แบบนี้มักได้มาจากการ backup ด้วย `mysqldump` หรือมีคนส่งมาให้ทีม
+ใช้เมื่อมีไฟล์ mysqldump (เช่น `Dump20260826.sql`) ที่ต้องการ import กลับเข้า MySQL remote — ไฟล์แบบนี้มักได้มาจากการ backup ด้วย `mysqldump` หรือมีคนส่งมาให้ทีม
 
-### คำเตือนก่อนเริ่ม
-
-- ไฟล์ dump ที่มีข้อมูลจริง (session, VP/VC ที่ capture มา, log การ verify ฯลฯ) **ห้ามใส่ไว้ใน repo หรือ commit ขึ้น git เด็ดขาด** — เก็บไว้แยกนอก repo เท่านั้น ตรงตาม `OID4VP-1.0-COMPLIANCE-AUDIT.md` finding C-05 ที่เพิ่งปิดไป (ไฟล์ `Dump20260826.sql` ที่ใช้อ้างอิงในคู่มือนี้มีข้อมูล session/response จริงอยู่ — ยืนยันแล้วว่าไม่ได้ถูกคัดลอกเข้า repo)
-- ไฟล์ dump ที่ generate จาก `mysqldump` แบบมาตรฐานจะมี `DROP TABLE IF EXISTS` ก่อนสร้างตารางใหม่ทุกตาราง — แปลว่า restore แล้ว **ข้อมูลเดิมในตารางที่ชื่อตรงกันจะหายไปทั้งหมด** แทนที่ด้วยข้อมูลในไฟล์ dump ควร backup DB ปัจจุบันก่อนเสมอ
-
-รันทุกคำสั่งด้านล่างผ่าน `docker run` ด้วย image `mysql:8.0` — **ไม่ต้องติดตั้ง `mysql` client บนเครื่องเลย** เพราะยืม image เดียวกับที่ใช้ใน `docker-compose.yml` มารันเป็น client ชั่วคราวแทน (`--rm` ลบ container ทิ้งทันทีหลังรันเสร็จ) ให้รันคำสั่งจากโฟลเดอร์ที่มีไฟล์ dump อยู่ (เช่นโฟลเดอร์ที่เก็บ `Dump20260826.sql` ไว้นอก repo)
 
 ### ขั้นตอนที่ 1 — Backup DB ปัจจุบันก่อน (กันพลาด)
 
 ```bash
-docker run --rm mysql:8.0 mysqldump -h 192.100.10.48 -P 3306 -u root -p"<password จาก .env>" verifier > backup_before_restore_$(date +%Y%m%d_%H%M%S).sql
+docker run --rm mysql:8.0 mysqldump -h {your serv ip} -P 3306 -u root -p"<password จาก .env>" verifier > backup_before_restore_$(date +%Y%m%d_%H%M%S).sql
 ```
 
 แทน `<password จาก .env>` ด้วยค่าจริงจาก `CONNECTION_STRING` (ระวังเรื่อง shell history เก็บ password ไว้ — ถ้ากังวลให้ใช้ตัวแปร env ชั่วคราวแทนการพิมพ์ตรงๆ) เก็บไฟล์ backup ที่ได้ไว้นอก repo เช่นเดียวกับไฟล์ dump
@@ -104,7 +98,7 @@ docker run --rm mysql:8.0 mysqldump -h 192.100.10.48 -P 3306 -u root -p"<passwor
 ### ขั้นตอนที่ 2 — Restore ไฟล์ dump
 
 ```bash
-docker run -i --rm mysql:8.0 mysql -h 192.100.10.48 -P 3306 -u root -p"<password จาก .env>" verifier < Dump20260826.sql
+docker run -i --rm mysql:8.0 mysql -h {your serv.ip} -P 3306 -u root -p"<password จาก .env>" verifier < Dump20260826.sql
 ```
 
 `-i` จำเป็น (เปิด stdin ให้ container รับไฟล์ dump ที่ redirect เข้ามาจากฝั่ง host ได้) ไม่ต้อง mount volume ใดๆ เพิ่ม
@@ -112,7 +106,7 @@ docker run -i --rm mysql:8.0 mysql -h 192.100.10.48 -P 3306 -u root -p"<password
 ### ขั้นตอนที่ 3 — ตรวจสอบหลัง restore
 
 ```bash
-docker run --rm mysql:8.0 mysql -h 192.100.10.48 -P 3306 -u root -p"<password จาก .env>" verifier -e "SELECT COUNT(*) FROM dbverifiersession; SELECT COUNT(*) FROM dbdocumenttype;"
+docker run --rm mysql:8.0 mysql -h {your server ip} -P 3306 -u root -p"<password จาก .env>" verifier -e "SELECT COUNT(*) FROM dbverifiersession; SELECT COUNT(*) FROM dbdocumenttype;"
 ```
 
 หรือเปิดแอป (`http://localhost:5001`) แล้วดูหน้า `/AuditLog` หรือลอง flow verify จริงว่าข้อมูลขึ้นถูกต้อง

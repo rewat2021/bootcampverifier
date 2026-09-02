@@ -1,35 +1,32 @@
 # คู่มือ Deploy VerifierAPI ผ่าน Docker (Environment / Secrets)
 
 **อัปเดตล่าสุด:** 2026-08-26
-**เกี่ยวข้องกับ:** OID4VP-1.0-COMPLIANCE-AUDIT.md — finding C-05 (secret ใน source control)
 
 ## ภาพรวม
 
-ตั้งแต่การแก้ไขรอบนี้ **secret ทั้งหมดของ VerifierAPI มาจากไฟล์ `.env` ไฟล์เดียวที่ root ของ repo** (`bootcamp_verifier/.env`) — `appsettings.json` ไม่มี secret จริงฝังอยู่อีกต่อไป (ClientID/ClientSecret ของ ThaID ถูกลบออกทั้ง key แล้ว)
+ตั้งแต่การแก้ไขรอบนี้ **secret ทั้งหมดของ VerifierAPI มาจากไฟล์ `.env` ไฟล์เดียวที่ root ของ repo** 
 
 `docker-compose.yml` มี `env_file: .env` — inject ตัวแปรเข้า container โดยตรงตอน `docker-compose up`
 
-ไฟล์ `.env` อยู่ใน `.gitignore` แล้ว **ห้าม commit ขึ้น git เด็ดขาด**
-
 ## 1. ตัวแปรใน `.env`
 
-| ตัวแปร | จำเป็นหรือไม่ | คำอธิบาย |
-|---|---|---|
-| `CONNECTION_STRING` | จำเป็น | connection string เชื่อม MySQL รูปแบบ `server=<host>;port=<port>;database=<db>;user=<user>;password=<password>` ปัจจุบันชี้ไปที่ MySQL remote server (ไม่ใช่ container ในเครื่อง) |
-| `MYSQL_ROOT_PASSWORD` | ใช้เฉพาะกรณีรัน container `verifier-mysql` เองในเครื่อง | ไม่เกี่ยวถ้าต่อ MySQL remote อย่างเดียวตามที่ตั้งค่าไว้ตอนนี้ |
-| `ThaIDConfig__ClientID` | จำเป็น | client id ที่ได้จาก ThaID gateway — bind เข้า `ThaIDConfig:ClientID` ผ่าน naming convention แบบ double-underscore ของ .NET |
-| `ThaIDConfig__ClientSecret` | จำเป็น | client secret จาก ThaID gateway — **ต้อง rotate เป็นค่าใหม่** เพราะค่าเดิมเคย commit ขึ้น git มาก่อน ถือว่ารั่วแล้ว (ดูหัวข้อ 4) |
-| `ASPNETCORE_ENVIRONMENT` | จำเป็น | `Production` หรือ `Development` |
-| `BASE_URL` | จำเป็น | URL สาธารณะของ VerifierAPI เอง ที่ browser/Wallet ภายนอกเข้าถึงได้ |
-| `INTERNAL_BASE_URL` | จำเป็น | URL ของ VerifierAPI เอง ที่ใช้สร้าง `response_uri`/callback ภายในโปรโตคอล OpenID4VP (คนละความหมายกับ `ISSUER_BASE_URL` — อย่าใช้ปนกัน) |
-| `ISSUER_BASE_URL` | จำเป็นถ้าใช้ `dc+sd-jwt`/`jwt_vc_json` | URL ของ Issuer ใช้สร้างค่า `vct_values`/`type_values` ใน DCQL query — priority สูงสุดในโค้ด ต้องตั้งชื่อ key ให้ตรงเป๊ะ (ไม่ใช่ `IssuerUrl`) ไม่งั้นจะถูก `INTERNAL_BASE_URL` บังก่อน |
+| ตัวแปร                      | จำเป็นหรือไม่                          | คำอธิบาย                                                                                                                                                                                                                               |
+| --------------------------- | -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CONNECTION_STRING`         | จำเป็น                                 | connection string เชื่อม MySQL รูปแบบ `server=<host>;port=<port>;database=<db>;user=<user>;password=<password>` ปัจจุบันชี้ไปที่ MySQL remote server (ไม่ใช่ container ในเครื่อง)                                                      |
+| `MYSQL_ROOT_PASSWORD`       | ไม่ใช้แล้ว                             | เดิมใช้เฉพาะตอนที่ `docker-compose.yml` ยังมี service `verifier-mysql` (MySQL local ในเครื่อง) — ตอนนี้เอา service นั้นออกแล้วเพราะ deploy ลง remote server จริง ไม่ต้องตั้งค่านี้อีก (จะเก็บบรรทัดนี้ไว้เฉยๆ ใน `.env` ก็ไม่มีผลอะไร) |
+| `ThaIDConfig__ClientID`     | จำเป็น                                 | client id ที่ได้จาก ThaID gateway                                                                                                                                                                                                      |
+| `ThaIDConfig__ClientSecret` | จำเป็น                                 | client secret จาก ThaID gateway                                                                                                                                                                                                        |
+| `ASPNETCORE_ENVIRONMENT`    | จำเป็น                                 | `Production` หรือ `Development`                                                                                                                                                                                                        |
+| `BASE_URL`                  | จำเป็น                                 | URL สาธารณะของ VerifierAPI เอง ที่ browser/Wallet ภายนอกเข้าถึงได้                                                                                                                                                                     |
+| `INTERNAL_BASE_URL`         | จำเป็น                                 | URL ของ VerifierAPI เอง ที่ใช้สร้าง `response_uri`/callback ภายในโปรโตคอล OpenID4VP (คนละความหมายกับ `ISSUER_BASE_URL` — อย่าใช้ปนกัน)                                                                                                 |
+| `ISSUER_BASE_URL`           | จำเป็นถ้าใช้ `dc+sd-jwt`/`jwt_vc_json` | URL ของ Issuer ใช้สร้างค่า `vct_values`/`type_values` ใน DCQL query — priority สูงสุดในโค้ด ต้องตั้งชื่อ key ให้ตรงเป๊ะ (ไม่ใช่ `IssuerUrl`) ไม่งั้นจะถูก `INTERNAL_BASE_URL` บังก่อน                                                  |
 
 ## 2. ติดตั้งและรันผ่าน Docker
 
 ### 2.1 Prerequisites
 
 - ติดตั้ง Docker + Docker Compose แล้ว
-- เครื่องที่รัน Docker เข้าถึง MySQL remote ได้จริง (ทดสอบ `telnet 192.100.10.48 3306` หรือใช้ MySQL client ต่อดูก่อน)
+- เครื่องที่รัน Docker เข้าถึง MySQL remote ได้จริง (ทดสอบ `telnet <DB_HOST> 3306` หรือใช้ MySQL client ต่อดูก่อน — `<DB_HOST>` คือ host ของ MySQL server ปลายทางที่ระบุไว้ใน `CONNECTION_STRING` ของ `.env`)
 
 ### 2.2 สร้าง Docker network ภายนอกที่จำเป็น
 
@@ -89,70 +86,61 @@ docker-compose up -d --force-recreate
 docker-compose down
 ```
 
-ข้อมูลใน volume `verifier-mysql-data` จะยังอยู่แม้ `down` แล้ว เว้นแต่สั่ง `docker-compose down -v` (ลบ volume ด้วย — ระวังถ้ามีข้อมูลสำคัญอยู่ในนั้น)
+### 2.8 หมายเหตุ: `docker-compose.yml` มี service เดียว (`verifier-api`)
 
-### 2.8 หมายเหตุ: MySQL container ในเครื่องไม่ได้ถูกใช้งานจริง
+ตอนนี้ `docker-compose up` จะสร้าง container `verifier-api` ตัวเดียวเท่านั้น
 
-`docker-compose.yml` ยังนิยาม service `verifier-mysql` ไว้ และ `verifier-api` ตั้ง `depends_on: verifier-mysql: condition: service_healthy` — เพราะตอนนี้ `CONNECTION_STRING` ชี้ไป MySQL remote (`192.100.10.48`) โดยตรงแล้ว container `verifier-mysql` ในเครื่องจะยังถูกสร้างขึ้นมาด้วยทุกครั้งที่ `docker-compose up` แต่**ไม่ได้ถูกใช้งานจริงเลย** — เสียพื้นที่ดิสก์และพอร์ต 3307 ไปโดยเปล่าประโยชน์ ไม่กระทบการทำงาน (แค่เสียทรัพยากรเฉยๆ) แต่ถ้าต้องการตัดออกให้เหลือรันแค่ `verifier-api` อย่างเดียว บอกได้ ผมแก้ `docker-compose.yml` ให้เอา service `verifier-mysql` กับ `depends_on` ออกได้เลย
+## 3. Restore ฐานข้อมูลลง MySQL server 
 
-## 3. Restore ฐานข้อมูลจากไฟล์ dump (.sql)
+**เป้าหมายของการ restore คือ MySQL server ของระบบปลายทางที่ไปติดตั้งจริง (ตัวเดียวกับที่ระบุใน `CONNECTION_STRING` ของ `.env`) ไม่ใช่ MySQL ในคอนเทนเนอร์ใดๆ** (`docker-compose.yml` ไม่มี MySQL container ) คำสั่งด้านล่างที่ขึ้นต้นด้วย `docker run` คือการยืม **image `mysql:8.0` มาใช้เป็นแค่ตัว client เครื่องมือ** (เหมือนติดตั้งโปรแกรม `mysql`/`mysqldump` ชั่วคราว) เพื่อยิงคำสั่งออกไปหา server ที่ `-h <DB_HOST>` เท่านั้น ตัว container จะถูกลบทิ้งทันทีหลังรันเสร็จ (`--rm`) ไม่มีการเก็บข้อมูลไว้ในคอนเทนเนอร์เลย
 
-ใช้เมื่อมีไฟล์ mysqldump (เช่น `Dump20260826.sql`) ที่ต้องการ import กลับเข้า MySQL remote (`192.100.10.48`) — ไฟล์แบบนี้มักได้มาจากการ backup ด้วย `mysqldump` หรือมีคนส่งมาให้ทีม
+แทน `<DB_HOST>` ทุกจุดด้านล่างด้วย host จริงของ MySQL server ปลายทางที่กำลังติดตั้งอยู่ (ดูค่าได้จาก `CONNECTION_STRING` ใน `.env` ของ server นั้นๆ — คนละค่ากันในแต่ละสภาพแวดล้อม เช่น dev/staging/production ไม่ใช่ค่าคงที่ค่าเดียว)
 
-### คำเตือนก่อนเริ่ม
+ถ้าเครื่องที่ใช้รันคำสั่งมี `mysql`/`mysqldump` client ติดตั้งอยู่แล้ว จะไม่ใช้ Docker เลยก็ได้ — แค่ตัดคำว่า `docker run --rm mysql:8.0` ออกจากหน้าคำสั่งแต่ละอันด้านล่าง แล้วรัน `mysqldump`/`mysql` ตรงๆ ผลลัพธ์เหมือนกันทุกประการ เพราะเป้าหมายปลายทาง (`-h <DB_HOST>`) เป็นตัวเดียวกัน
 
-- ไฟล์ dump ที่มีข้อมูลจริง (session, VP/VC ที่ capture มา, log การ verify ฯลฯ) **ห้ามใส่ไว้ใน repo หรือ commit ขึ้น git เด็ดขาด** — เก็บไว้แยกนอก repo เท่านั้น ตรงตาม `OID4VP-1.0-COMPLIANCE-AUDIT.md` finding C-05 ที่เพิ่งปิดไป (ไฟล์ `Dump20260826.sql` ที่ใช้อ้างอิงในคู่มือนี้มีข้อมูล session/response จริงอยู่ — ยืนยันแล้วว่าไม่ได้ถูกคัดลอกเข้า repo)
-- ไฟล์ dump ที่ generate จาก `mysqldump` แบบมาตรฐานจะมี `DROP TABLE IF EXISTS` ก่อนสร้างตารางใหม่ทุกตาราง — แปลว่า restore แล้ว **ข้อมูลเดิมในตารางที่ชื่อตรงกันจะหายไปทั้งหมด** แทนที่ด้วยข้อมูลในไฟล์ dump ควร backup DB ปัจจุบันก่อนเสมอ
+ใช้เมื่อมีไฟล์ mysqldump ( `Dump20260826.sql`) ที่ต้องการ import กลับเข้า MySQL server 
 
-รันทุกคำสั่งด้านล่างผ่าน `docker run` ด้วย image `mysql:8.0` — **ไม่ต้องติดตั้ง `mysql` client บนเครื่องเลย** เพราะยืม image เดียวกับที่ใช้ใน `docker-compose.yml` มารันเป็น client ชั่วคราวแทน (`--rm` ลบ container ทิ้งทันทีหลังรันเสร็จ) ให้รันคำสั่งจากโฟลเดอร์ที่มีไฟล์ dump อยู่ (เช่นโฟลเดอร์ที่เก็บ `Dump20260826.sql` ไว้นอก repo)
 
-### ขั้นตอนที่ 1 — Backup DB ปัจจุบันก่อน (กันพลาด)
+### ขั้นตอนที่ 1 — Backup ข้อมูลบน server ปัจจุบันก่อน (กันพลาด)
 
 ```bash
-docker run --rm mysql:8.0 mysqldump -h 192.100.10.48 -P 3306 -u root -p"<password จาก .env>" verifier > backup_before_restore_$(date +%Y%m%d_%H%M%S).sql
+docker run --rm mysql:8.0 mysqldump -h <DB_HOST> -P 3306 -u root -p"<password จาก .env>" verifier > backup_before_restore_$(date +%Y%m%d_%H%M%S).sql
 ```
 
-แทน `<password จาก .env>` ด้วยค่าจริงจาก `CONNECTION_STRING` (ระวังเรื่อง shell history เก็บ password ไว้ — ถ้ากังวลให้ใช้ตัวแปร env ชั่วคราวแทนการพิมพ์ตรงๆ) เก็บไฟล์ backup ที่ได้ไว้นอก repo เช่นเดียวกับไฟล์ dump
+แทน `<password จาก .env>` ด้วยค่าจริงจาก `CONNECTION_STRING` (ระวังเรื่อง shell history เก็บ password ไว้ — ถ้ากังวลให้ใช้ตัวแปร env ชั่วคราวแทนการพิมพ์ตรงๆ) เก็บไฟล์ backup ที่ได้ไว้นอก repo เช่นเดียวกับไฟล์ dump — ไฟล์นี้คือสำเนาของข้อมูลที่อยู่บน server จริง ไม่ใช่ข้อมูลจากคอนเทนเนอร์ใดๆ
 
-### ขั้นตอนที่ 2 — Restore ไฟล์ dump
+### ขั้นตอนที่ 2 — Restore ไฟล์ dump ลง server
 
 ```bash
-docker run -i --rm mysql:8.0 mysql -h 192.100.10.48 -P 3306 -u root -p"<password จาก .env>" verifier < Dump20260826.sql
+docker run -i --rm mysql:8.0 mysql -h <DB_HOST> -P 3306 -u root -p"<password จาก .env>" verifier < Dump20260826.sql
 ```
 
-`-i` จำเป็น (เปิด stdin ให้ container รับไฟล์ dump ที่ redirect เข้ามาจากฝั่ง host ได้) ไม่ต้อง mount volume ใดๆ เพิ่ม
+`-i` จำเป็น (เปิด stdin ให้ container รับไฟล์ dump ที่ redirect เข้ามาจากฝั่ง host ได้) คำสั่งนี้เขียนข้อมูลลงตาราง `verifier` **บน server ปลายทางโดยตรง** — container ที่ใช้รันคำสั่งเป็นเพียงตัวส่งคำสั่งเท่านั้น ไม่ได้เก็บอะไรไว้ที่ตัวเอง
 
-### ขั้นตอนที่ 3 — ตรวจสอบหลัง restore
+### ขั้นตอนที่ 3 — ตรวจสอบว่าข้อมูลบน server อัปเดตแล้วจริง
 
 ```bash
-docker run --rm mysql:8.0 mysql -h 192.100.10.48 -P 3306 -u root -p"<password จาก .env>" verifier -e "SELECT COUNT(*) FROM dbverifiersession; SELECT COUNT(*) FROM dbdocumenttype;"
+docker run --rm mysql:8.0 mysql -h <DB_HOST> -P 3306 -u root -p"<password จาก .env>" verifier -e "SELECT COUNT(*) FROM dbverifiersession; SELECT COUNT(*) FROM dbdocumenttype;"
 ```
 
-หรือเปิดแอป (`http://localhost:5001`) แล้วดูหน้า `/AuditLog` หรือลอง flow verify จริงว่าข้อมูลขึ้นถูกต้อง
+หรือเปิดแอป (`http://localhost:5001`) แล้วดูหน้า `/AuditLog` หรือลอง flow verify จริงว่าข้อมูลขึ้นถูกต้อง — เพราะแอปต่อ `CONNECTION_STRING` เดียวกันไปที่ server ตัวเดียวกันนี้อยู่แล้ว ถ้า restore สำเร็จ แอปจะเห็นข้อมูลใหม่ทันทีโดยไม่ต้อง restart
 
 ### หมายเหตุ
 
 - ไม่ต้อง restart container `verifier-api` หลัง restore DB — แอปต่อ MySQL remote สดทุกครั้งอยู่แล้ว ไม่มีการแคชข้อมูลไว้ในโปรเซส
 - ถ้า restore แล้วแอป error เกี่ยวกับ schema ไม่ตรง (เช่น คอลัมน์หาย/ชื่อไม่ตรง) ให้เทียบ schema ในไฟล์ dump กับ `db/init.sql` และ `db/migrations/` ในโปรเจกต์ว่าตรงเวอร์ชันกันหรือไม่ ก่อน restore
-- ทั้ง 3 คำสั่งข้างต้นไม่เกี่ยวกับ `docker-compose.yml`/`lab-network` เลย — เป็นแค่ `docker run` ตัวเดี่ยวๆ ที่ยิงตรงไปหา MySQL remote จากเครื่อง host เท่านั้น ใช้ได้แม้ยังไม่เคย `docker-compose up` มาก่อน
+- ทั้ง 3 คำสั่งข้างต้นไม่เกี่ยวกับ `docker-compose.yml`/`lab-network` เลย — เป็นแค่ `docker run` ตัวเดี่ยวๆ ที่ยิงตรงไปหา MySQL **server จริง** จากเครื่อง host เท่านั้น ใช้ได้แม้ยังไม่เคย `docker-compose up` มาก่อน
 
 ## 4. Rotate ThaID ClientSecret
 
-ค่า `ClientSecret` เดิมเคยถูก commit ไว้ใน `appsettings.json` มาก่อน (พบระหว่างการตรวจสอบตาม `OID4VP-1.0-COMPLIANCE-AUDIT.md` finding C-05) ต้องถือว่ารั่วแล้วแม้จะลบออกจาก working tree ปัจจุบันไปแล้วก็ตาม เพราะยังอยู่ใน git history
+ตรวจสอบค่า `ClientSecret`, ClientID ในไฟล์ .env
 
-ขั้นตอน:
-
-1. ติดต่อ ThaID gateway admin เพื่อขอ `ClientSecret` ใหม่ และแจ้งให้ revoke ค่าเดิม
-2. แก้บรรทัด `ThaIDConfig__ClientSecret=` ใน `.env` เป็นค่าใหม่
-3. รีสตาร์ทตามหัวข้อ 2.6 (`docker-compose down` + `up -d`)
-4. ทดสอบ flow login ผ่าน ThaID (`/thaiid/login` → `/Account/ThaIDSignIn`) ว่าใช้งานได้ปกติ
-5. (แนะนำ ยังไม่ได้ทำ) ลบค่าเดิมออกจาก git history ด้วย `git filter-repo` หรือ BFG Repo-Cleaner — เป็น operation ที่กระทบ history ทั้ง repo ต้องตัดสินใจร่วมกับทีมก่อนทำ
 
 ## 5. Troubleshooting
 
 **"CONNECTION_STRING environment variable must be set"** — `.env` หาไม่เจอ หรือ container ไม่ได้ inject env var เข้าไป ตรวจว่า `docker-compose.yml` มี `env_file: .env` และไฟล์ `.env` อยู่ที่เดียวกับ `docker-compose.yml` จริง
 
-**เชื่อม MySQL ไม่ได้ / host resolve ไม่ออก** — เช็คว่า `CONNECTION_STRING` ชี้ไป host ที่เข้าถึงได้จริงจากเครื่องที่รัน container อยู่ (ไม่ใช่ชื่อ Docker service เช่น `verifier-mysql` ถ้าไม่ได้รันในเครือข่าย Docker เดียวกัน)
+**เชื่อม MySQL ไม่ได้ / host resolve ไม่ออก** — เช็คว่า `CONNECTION_STRING` ชี้ไป host จริงที่เข้าถึงได้จากเครื่องที่รัน container `verifier-api` อยู่ (`docker-compose.yml` ไม่มี MySQL container ให้สับสนแล้ว ต้องเป็น host/IP ของ MySQL server ปลายทางเท่านั้น)
 
 **DCQL `vct_values`/`type_values` ชี้ผิดที่ (ไปที่ Verifier เองแทน Issuer)** — ตรวจว่าตั้งชื่อ key เป็น `ISSUER_BASE_URL` ไม่ใช่ `IssuerUrl` (ดูหัวข้อ 1)
 

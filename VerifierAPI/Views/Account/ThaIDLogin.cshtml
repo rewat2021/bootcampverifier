@@ -180,6 +180,16 @@
                 </p>
 
                 @{
+                    var errorMessage = ViewBag.Error as string;
+                }
+                @if (!string.IsNullOrWhiteSpace(errorMessage))
+                {
+                    <p style="color:#c0392b; text-align:center; font-size:clamp(12px, min(2vw, 1.8vh), 15px); max-width:480px;">
+                        @errorMessage
+                    </p>
+                }
+
+                @{
                     var returnUrl = ViewBag.ReturnUrl as string;
                     var documentType = ViewBag.DocumentType as string;
                     var loginUrl = "/thaiid/login";

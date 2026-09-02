@@ -363,3 +363,17 @@ MigrationBackup/
 FodyWeavers.xsd
 
 .env
+
+# .NET build output
+bin/
+obj/
+*.dll
+*.exe
+*.pdb
+
+# ถ้าอยากเจาะจงเฉพาะโฟลเดอร์นี้
+api/VerifierAPI/bin/
+api/VerifierAPI/obj/
+
+# Publish profile user settings (ข้อมูลส่วนตัว/credential เฉพาะเครื่อง)
+*.pubxml.user

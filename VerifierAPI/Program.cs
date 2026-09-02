@@ -106,15 +106,30 @@ builder.Services.AddControllersWithViews()
 var AllowSpecificOriginWithCredentials = "AllowSpecificOriginWithCredentials";
 builder.Services.AddCors(options =>
 {
-
     options.AddPolicy(AllowSpecificOriginWithCredentials,
                 policy =>
                 {
-                    policy.WithOrigins(new string[] { "https://wallet-test.etda.or.th", "https://issuer-cu-test.etda.or.th", "https://issuer.zenithcomp.co.th:455",
-                        "https://vc-testtool.etda.or.th", "https://vc-testtool-test.etda.or.th", "https://verifier.zenithcomp.co.th:455", "https://wallet.zenithcomp.co.th:455" }) // Replace with your allowed origins
+                    policy.SetIsOriginAllowed(origin =>
+                    {
+                        if (string.IsNullOrEmpty(origin))
+                            return false;
+
+                        try
+                        {
+                            var host = new Uri(origin).Host;
+                            return host.Equals("etda.or.th", StringComparison.OrdinalIgnoreCase)
+                                || host.EndsWith(".etda.or.th", StringComparison.OrdinalIgnoreCase)
+                                || host.Equals("zenithcomp.co.th", StringComparison.OrdinalIgnoreCase)
+                                || host.EndsWith(".zenithcomp.co.th", StringComparison.OrdinalIgnoreCase);
+                        }
+                        catch
+                        {
+                            return false;
+                        }
+                    })
                            .AllowAnyHeader()
-                           .AllowAnyMethod();
-                    //.AllowCredentials(); // This enables Access-Control-Allow-Credentials
+                           .AllowAnyMethod()
+                           .AllowCredentials(); // เปิดใช้ credentials (cookie, Authorization header ที่ต้องส่งข้าม origin)
                 });
 
 });
@@ -152,6 +167,15 @@ builder.Services.AddHttpClient<VerifierAPI.Services.VerifierRequestService>(clie
 
 // Register service หลัก
 builder.Services.AddScoped<VerifierAPI.Services.VerifierRequestService>();
+
+// SECURITY (2026-08-27): HttpClient for ThaIDService's server-to-server call to
+// the DOPA ThaID token endpoint (AccountController.ThaiIDCallback). See
+// ThaIDService.cs for what this replaces (the old ThaIDSignIn endpoint trusted
+// a bare `pid` query-string value with no verification at all).
+builder.Services.AddHttpClient<ThaIDService>(client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(15);
+});
 
 
 var app = builder.Build();

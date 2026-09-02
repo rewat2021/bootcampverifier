@@ -34,9 +34,17 @@ public partial class VerifierDbContext : DbContext
     {
         if (!optionsBuilder.IsConfigured)
         {
-            var connectionString = Environment.GetEnvironmentVariable("CONNECTION_STRING")
-                ?? throw new InvalidOperationException("CONNECTION_STRING environment variable must be set.");
-            optionsBuilder.UseMySql(connectionString, ServerVersion.AutoDetect(connectionString));
+            string connectionString = Environment.GetEnvironmentVariable("CONNECTION_STRING");
+            if (string.IsNullOrWhiteSpace(connectionString))
+            {
+                throw new InvalidOperationException(
+                    "CONNECTION_STRING environment variable is not set. Provide a MySQL connection string " +
+                    "(e.g. \"server=...;port=3306;database=issuer;user=...;password=...;sslmode=None\") via " +
+                    "the environment (see Properties/launchSettings.json for local dev, docker-compose.yml's " +
+                    ".env for containers) — there is no hardcoded fallback.");
+            }
+
+            optionsBuilder.UseMySql(connectionString, Microsoft.EntityFrameworkCore.ServerVersion.Parse("8.0.45-mysql"));
         }
     }
     protected override void OnModelCreating(ModelBuilder modelBuilder)

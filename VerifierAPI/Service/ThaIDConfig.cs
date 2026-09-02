@@ -12,6 +12,7 @@ namespace VerifierAPI.Service
         public string GatewayBaseUrl { get; set; } = string.Empty;
         public string ClientID { get; set; } = string.Empty;
         public string ClientSecret { get; set; } = string.Empty;
+        public string RedirectURL { get; set; } = string.Empty;
     }
 
     /// <summary>
@@ -32,5 +33,6 @@ namespace VerifierAPI.Service
         public static string GatewayBaseUrl => _options.GatewayBaseUrl;
         public static string ClientID => _options.ClientID;
         public static string ClientSecret => _options.ClientSecret;
+        public static string RedirectURL => _options.RedirectURL;
     }
 }
